@@ -1,0 +1,7 @@
+# Optional explicit package list for aur-cooldown.
+# If this file has NO uncommented entries, aur-cooldown automatically tracks ALL
+# installed AUR packages (pacman -Qm, minus -debug companions). Uncomment/add names
+# below only if you want to RESTRICT it to a specific subset.
+#
+# claude-code
+# cursor-bin

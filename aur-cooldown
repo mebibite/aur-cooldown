@@ -1,0 +1,391 @@
+#!/usr/bin/env python3
+"""
+aur-cooldown — install AUR upgrades only after they have aged >= N days, so a
+malicious or broken push has time to be caught before it reaches you.
+
+Age is judged by the AUR server's LastModified timestamp (set server-side at push
+time, NOT the git commit date, which any committer can forge -- the technique used
+in the June 2026 AUR incident). The RPC only reports LastModified for the CURRENT
+version, so we capture {version, HEAD commit, LastModified} over time into a ledger.
+
+  aur-cooldown observe      capture the current version+commit+push-time for all
+                            installed AUR packages (one batched RPC call, plus a
+                            cheap `git ls-remote` only for newly-seen versions), and
+                            refresh any configured denylist feeds. Run periodically.
+  aur-cooldown upgrade       install, unattended, the newest recorded version that is
+                            now >= N days old AND whose exact commit is still in the
+                            package's canonical git history. Add --dry-run to preview.
+  aur-cooldown status        show, per package, the eligible aged version vs the tip.
+  aur-cooldown refresh       re-fetch the denylist feeds only.
+
+Safety model (no human PKGBUILD review required):
+  * age from server LastModified          -> a backdated commit cannot look old
+  * decision bound to the exact commit    -> reusing an old version string on a new
+                                             malicious commit is rejected
+  * commit must still be an ancestor of HEAD -> versions reset/deleted during cleanup
+                                             are dropped automatically (you wait)
+  * .SRCINFO at that commit must match the recorded version -> anti-skew/anti-reuse
+  * denylist, local + optional community feeds -> react to advisories (fail-safe: a
+                                             denylist can only make you WAIT, never
+                                             cause an install)
+  * fail closed: anything unverifiable is skipped, never installed
+Guarantee holds as long as malice is detected within the cooldown window.
+
+Config:  AUR_COOLDOWN_DAYS (default 7). Optional files under
+  ~/.config/aur-cooldown/ : packages (explicit list; default = all installed AUR),
+  revoked (manual denylist: "<pkg> <version-or-commit-prefix>"), denylist-feeds
+  (one URL per line; each returns package names to freeze; default: none).
+"""
+import json, os, subprocess, sys, time, urllib.parse, urllib.request, urllib.error, argparse, shutil
+
+HOME = os.path.expanduser("~")
+XDG_DATA   = os.environ.get("XDG_DATA_HOME",   os.path.join(HOME, ".local/share"))
+XDG_CONFIG = os.environ.get("XDG_CONFIG_HOME", os.path.join(HOME, ".config"))
+XDG_CACHE  = os.environ.get("XDG_CACHE_HOME",  os.path.join(HOME, ".cache"))
+STATE   = os.environ.get("AUR_COOLDOWN_STATE", os.path.join(XDG_DATA, "aur-cooldown"))
+CACHE   = os.environ.get("AUR_COOLDOWN_CACHE", os.path.join(XDG_CACHE, "aur-cooldown"))
+CONFDIR = os.path.join(XDG_CONFIG, "aur-cooldown")
+LEDGER     = os.path.join(STATE, "ledger.jsonl")
+LASTOBS    = os.path.join(STATE, "last-observe")
+FEED_CACHE = os.path.join(STATE, "denylist-feed.cache")
+PKGCONF    = os.path.join(CONFDIR, "packages")
+DENY       = os.path.join(CONFDIR, "revoked")
+FEEDSCONF  = os.path.join(CONFDIR, "denylist-feeds")
+RPC      = "https://aur.archlinux.org/rpc/v5/info"
+GITBASE  = "https://aur.archlinux.org"
+UA       = "aur-cooldown/0.5 (https://github.com/adrinjalali/aur-cooldown)"
+SCANNER  = "https://github.com/lenucksi/aur-malware-check"   # detection/IR companion
+DAYS     = int(os.environ.get("AUR_COOLDOWN_DAYS", "7"))
+RPC_BATCH = 150
+GIT_ENV  = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+
+def now(): return int(time.time())
+def day(ts): return time.strftime("%Y-%m-%d", time.localtime(ts))
+def ensure_dirs():
+    for d in (STATE, CACHE, CONFDIR): os.makedirs(d, exist_ok=True)
+
+def run(cmd, check=True, capture=True, env=None):
+    return subprocess.run(cmd, check=check, env=env,
+                          stdout=subprocess.PIPE if capture else None,
+                          stderr=subprocess.PIPE if capture else None, text=True)
+
+# ---- target selection -------------------------------------------------------
+def installed_aur():
+    # Actual installed foreign packages, minus split -debug companions (rebuilt with
+    # their base; some linger orphaned after a package moved to the official repos).
+    # We never synthesize a base that isn't present.
+    out = run(["pacman", "-Qm"]).stdout.splitlines()
+    return sorted(l.split()[0] for l in out
+                  if l.split() and not l.split()[0].endswith("-debug"))
+
+def targets(explicit):
+    """-> (names, is_auto). is_auto True only when the set came from pacman -Qm."""
+    if explicit: return explicit, False
+    if os.path.exists(PKGCONF):
+        lst = [l.strip() for l in open(PKGCONF)
+               if l.strip() and not l.strip().startswith("#")]
+        if lst: return sorted(set(lst)), False
+    return installed_aur(), True
+
+# ---- AUR RPC (authoritative timestamps) -------------------------------------
+def rpc_info(names):
+    res = {}
+    for i in range(0, len(names), RPC_BATCH):
+        chunk = names[i:i+RPC_BATCH]
+        qs = urllib.parse.urlencode([("arg[]", n) for n in chunk])
+        req = urllib.request.Request(f"{RPC}?{qs}", headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.load(r)
+        for e in data.get("results", []):
+            res[e["Name"]] = {"base": e["PackageBase"], "version": e["Version"],
+                              "last_modified": int(e["LastModified"])}
+    return res
+
+def ls_remote_head(base):
+    r = run(["git", "ls-remote", f"{GITBASE}/{base}.git", "HEAD"], check=False, env=GIT_ENV)
+    if r.returncode != 0 or not r.stdout.strip(): return None
+    return r.stdout.split()[0]
+
+# ---- ledger -----------------------------------------------------------------
+def load_ledger():
+    rows = []
+    if os.path.exists(LEDGER):
+        for line in open(LEDGER):
+            line = line.strip()
+            if not line: continue
+            try: r = json.loads(line)
+            except json.JSONDecodeError: continue
+            if "version" not in r and "pkgver" in r: r["version"] = r["pkgver"]  # legacy
+            if r.get("pkg") and r.get("version") and "last_modified" in r:
+                rows.append(r)
+    return rows
+
+def base_for(pkg, rows):
+    b = ""
+    for r in rows:
+        if r.get("pkg") == pkg and r.get("base"): b = r["base"]
+    return b
+
+def aged_versions(pkg, cutoff, rows):
+    """{version,last_modified,commit} with last_modified<=cutoff, newest push first.
+    Entries without a bound commit are ignored (can't be safely verified)."""
+    seen = {}
+    for r in rows:
+        if r.get("pkg") != pkg or not r.get("commit"): continue
+        if int(r["last_modified"]) > cutoff: continue
+        seen[r["version"]] = (int(r["last_modified"]), r["commit"])
+    return sorted(({"version": v, "last_modified": lm, "commit": c}
+                   for v, (lm, c) in seen.items()),
+                  key=lambda x: x["last_modified"], reverse=True)
+
+# ---- denylist (local file + optional community feeds) -----------------------
+def local_denylist():
+    out = []
+    if os.path.exists(DENY):
+        for line in open(DENY):
+            line = line.strip()
+            if not line or line.startswith("#"): continue
+            p = line.split()
+            if len(p) >= 2: out.append((p[0], p[1]))
+    return out
+
+def load_feed_names():
+    s = set()
+    if os.path.exists(FEED_CACHE):
+        for line in open(FEED_CACHE):
+            t = line.strip()
+            if t and not t.startswith("#"): s.add(t)
+    return s
+
+def refresh_feeds(verbose=True):
+    """Fetch package-name denylists from configured URLs into FEED_CACHE. Best-effort:
+    on any failure we keep the existing cache (fail-safe -- a denylist only withholds
+    installs, never causes one). Returns the effective set of frozen package names."""
+    if not os.path.exists(FEEDSCONF):
+        return load_feed_names()
+    urls = [l.strip() for l in open(FEEDSCONF)
+            if l.strip() and not l.strip().startswith("#")]
+    if not urls:
+        return load_feed_names()
+    names = set()
+    for u in urls:
+        try:
+            req = urllib.request.Request(u, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                text = r.read().decode("utf-8", "replace")
+        except Exception as e:
+            if verbose:
+                print(f"  denylist feed unreachable ({u}): {e}; keeping cache", file=sys.stderr)
+            return load_feed_names()
+        for line in text.splitlines():
+            s = line.strip()
+            if s and not s.startswith("#"):
+                names.add(s.split()[0])
+    ensure_dirs()
+    with open(FEED_CACHE, "w") as fh:
+        fh.write(f"# aur-cooldown denylist feed cache — fetched {day(now())}\n")
+        fh.write(f"# sources: {', '.join(urls)}\n")
+        for n in sorted(names):
+            fh.write(n + "\n")
+    return names
+
+def denied_version(pkg, version, commit, local):
+    for p, tok in local:
+        if p != pkg: continue
+        if tok == version: return True
+        if commit and commit.startswith(tok): return True
+    return False
+
+# ---- git --------------------------------------------------------------------
+def sync_repo(base):
+    repo = os.path.join(CACHE, base)
+    if os.path.isdir(os.path.join(repo, ".git")):
+        run(["git", "-C", repo, "fetch", "-q", "origin"], env=GIT_ENV)
+        run(["git", "-C", repo, "reset", "-q", "--hard", "@{u}"], env=GIT_ENV)
+    else:
+        if os.path.exists(repo): shutil.rmtree(repo)
+        run(["git", "clone", "-q", f"{GITBASE}/{base}.git", repo], env=GIT_ENV)
+    return repo
+
+def srcinfo_version(repo, commit):
+    r = run(["git", "-C", repo, "show", f"{commit}:.SRCINFO"], check=False)
+    if r.returncode != 0: return None
+    ver = rel = epoch = None
+    for line in r.stdout.splitlines():
+        if line.startswith("\tpkgver = "): ver = line.split(" = ", 1)[1]
+        elif line.startswith("\tpkgrel = "): rel = line.split(" = ", 1)[1]
+        elif line.startswith("\tepoch = "): epoch = line.split(" = ", 1)[1]
+    if ver is None: return None
+    return f"{epoch}:{ver}-{rel}" if epoch else f"{ver}-{rel}"
+
+def commit_exists(repo, c):
+    return run(["git", "-C", repo, "cat-file", "-e", f"{c}^{{commit}}"], check=False).returncode == 0
+
+def is_ancestor(repo, c):
+    return subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", c, "HEAD"]).returncode == 0
+
+def vercmp(a, b):
+    return int(run(["vercmp", a, b]).stdout.strip())
+
+def installed_version(pkg):
+    r = run(["pacman", "-Q", pkg], check=False)
+    return r.stdout.split()[1] if r.returncode == 0 and r.stdout.split() else None
+
+# ---- commands ---------------------------------------------------------------
+def cmd_observe(args):
+    ensure_dirs(); open(LEDGER, "a").close()
+    names, _ = targets(args.pkgs)
+    info = rpc_info(names)
+    rows = load_ledger()
+    have = {(r.get("pkg"), r.get("version")) for r in rows}
+    n = now(); added = 0
+    with open(LEDGER, "a") as fh:
+        for pkg in names:
+            d = info.get(pkg)
+            if not d:
+                print(f"  {pkg:30} not in AUR — skipped"); continue
+            key = (pkg, d["version"])
+            if key in have:
+                print(f"  {pkg:30} already have {d['version']} ({day(d['last_modified'])})")
+                continue
+            sha = ls_remote_head(d["base"])   # bind this version to its exact commit
+            if not sha:
+                print(f"  {pkg:30} could not read HEAD commit — skipped"); continue
+            fh.write(json.dumps({"pkg": pkg, "base": d["base"], "version": d["version"],
+                                 "commit": sha, "last_modified": d["last_modified"],
+                                 "seen_at": n}) + "\n")
+            print(f"  {pkg:30} recorded {d['version']} @ {sha[:8]} (pushed {day(d['last_modified'])})")
+            added += 1; have.add(key)
+    open(LASTOBS, "w").write(str(n))
+    print(f"\nobserve: {added} new version(s) recorded across {len(names)} packages.")
+    feed = refresh_feeds()
+    if feed:
+        hit = sorted(set(names) & feed)
+        if hit:
+            print(f"\n!! WARNING: installed package(s) appear on a malware denylist feed:")
+            for h in hit: print(f"     {h}")
+            print("   aur-cooldown will FREEZE these (never upgrade them). Investigate and")
+            print(f"   remove; for a full system/IOC scan see: {SCANNER}")
+
+def _resolve(pkg, cutoff, rows, local, feed, is_auto):
+    """-> (action, detail). action: up-to-date/none/yanked/build/not-installed/denied."""
+    installed = installed_version(pkg)
+    if installed is None and is_auto:
+        return ("not-installed", None)   # never invent an install in auto mode
+    if pkg in feed:
+        return ("denied", None)          # whole package frozen by a denylist feed
+    aged = aged_versions(pkg, cutoff, rows)
+    if not aged:
+        return ("none", None)
+    base = base_for(pkg, rows) or pkg
+    repo = None; saw_yank = False
+    for a in aged:
+        v, c = a["version"], a["commit"]
+        if installed and vercmp(v, installed) <= 0:
+            return ("up-to-date", {"version": installed})
+        if denied_version(pkg, v, c, local):
+            saw_yank = True; continue
+        if repo is None:
+            repo = sync_repo(base)
+        # the recorded commit must still exist, be canonical (ancestor of HEAD), and
+        # genuinely be version v -- this rejects reset/deleted versions AND a fresh
+        # malicious commit that reuses an old, already-aged version string.
+        if not commit_exists(repo, c) or not is_ancestor(repo, c) or srcinfo_version(repo, c) != v:
+            saw_yank = True; continue
+        return ("build", {"version": v, "repo": repo, "commit": c,
+                          "installed": installed, "last_modified": a["last_modified"]})
+    return ("yanked" if saw_yank else "none", None)
+
+def cmd_upgrade(args):
+    ensure_dirs()
+    rows = load_ledger(); local = local_denylist(); feed = load_feed_names()
+    cutoff = now() - DAYS * 86400
+    names, is_auto = targets(args.pkgs)
+    print(f"Cooldown: {DAYS} days (eligible if pushed on/before {day(cutoff)})\n")
+    plan = []
+    for pkg in names:
+        action, d = _resolve(pkg, cutoff, rows, local, feed, is_auto)
+        if action == "build":
+            tag = (f"UPGRADE {d['installed']} -> {d['version']}" if d["installed"]
+                   else f"install {d['version']}")
+            print(f"  {pkg:30} {tag} (pushed {day(d['last_modified'])})")
+            plan.append((pkg, d))
+        elif action == "up-to-date":
+            print(f"  {pkg:30} up to date ({d['version']})")
+        elif action == "denied":
+            print(f"  {pkg:30} FROZEN by denylist feed — skipped")
+        elif action == "yanked":
+            print(f"  {pkg:30} aged version not in canonical history (yanked) — waiting")
+        elif action == "not-installed":
+            continue   # only a -debug orphan / repo package — not ours to manage
+        else:
+            print(f"  {pkg:30} no aged version recorded yet")
+    print()
+    if not plan:
+        print("Nothing to do."); return
+    if args.dry_run:
+        print("Dry run — re-run without --dry-run to build & install."); return
+    ok, fail = [], []
+    for pkg, d in plan:
+        wt = os.path.join(CACHE, "build", pkg)
+        run(["git", "-C", d["repo"], "worktree", "remove", "--force", wt], check=False)
+        if os.path.exists(wt): shutil.rmtree(wt, ignore_errors=True)
+        run(["git", "-C", d["repo"], "worktree", "add", "-q", "--detach", wt, d["commit"]], env=GIT_ENV)
+        print(f"\n>> building {pkg} {d['version']} (aged AUR revision {d['commit'][:8]})")
+        rc = subprocess.run(["yay", "-B", "--noconfirm", wt]).returncode
+        (ok if rc == 0 else fail).append(pkg)
+        run(["git", "-C", d["repo"], "worktree", "remove", "--force", wt], check=False)
+    print(f"\nbuilt: {', '.join(ok) or 'none'}" + (f"   FAILED: {', '.join(fail)}" if fail else ""))
+
+def cmd_status(args):
+    rows = load_ledger(); feed = load_feed_names()
+    last = int(open(LASTOBS).read()) if os.path.exists(LASTOBS) else 0
+    if last:
+        print(f"last observe: {time.strftime('%Y-%m-%d %H:%M', time.localtime(last))} "
+              f"({(now()-last)//86400}d ago)")
+    else:
+        print("last observe: never (run 'aur-cooldown observe')")
+    cutoff = now() - DAYS * 86400
+    print(f"cooldown: {DAYS} days   packages tracked: "
+          f"{len({r['pkg'] for r in rows})}   frozen by feed: {len(feed)}   ledger: {LEDGER}\n")
+    by = {}
+    for r in rows: by.setdefault(r["pkg"], []).append(r)
+    for pkg in sorted(by):
+        es = sorted(by[pkg], key=lambda r: r["last_modified"])
+        tip = es[-1]
+        if pkg in feed:
+            ready = "FROZEN (denylist feed)"
+        else:
+            aged = [e for e in es if e["last_modified"] <= cutoff and e.get("commit")]
+            ready = (f"{aged[-1]['version']} (pushed {day(aged[-1]['last_modified'])})"
+                     if aged else "none yet")
+        print(f"  {pkg:28} eligible: {ready:42} tip: {tip['version']} "
+              f"(pushed {day(tip['last_modified'])})")
+
+def cmd_refresh(args):
+    ensure_dirs()
+    if not os.path.exists(FEEDSCONF):
+        print(f"no denylist feeds configured ({FEEDSCONF}); nothing to refresh."); return
+    feed = refresh_feeds()
+    print(f"denylist feed: {len(feed)} frozen package name(s) cached at {FEED_CACHE}")
+
+def main():
+    p = argparse.ArgumentParser(prog="aur-cooldown", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+    po = sub.add_parser("observe"); po.add_argument("pkgs", nargs="*"); po.set_defaults(fn=cmd_observe)
+    pu = sub.add_parser("upgrade"); pu.add_argument("--dry-run", action="store_true")
+    pu.add_argument("pkgs", nargs="*"); pu.set_defaults(fn=cmd_upgrade)
+    ps = sub.add_parser("status"); ps.add_argument("pkgs", nargs="*"); ps.set_defaults(fn=cmd_status)
+    pr = sub.add_parser("refresh"); pr.set_defaults(fn=cmd_refresh)
+    args = p.parse_args()
+    try:
+        args.fn(args)
+    except urllib.error.URLError as e:
+        print(f"aur-cooldown: network error: {e}", file=sys.stderr); sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        print(f"aur-cooldown: command failed: {' '.join(e.cmd)}\n{e.stderr or ''}",
+              file=sys.stderr); sys.exit(1)
+
+if __name__ == "__main__":
+    main()

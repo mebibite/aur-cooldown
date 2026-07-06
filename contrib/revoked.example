@@ -1,0 +1,7 @@
+# aur-cooldown local revocation denylist. When you learn a specific version/commit
+# is bad, add a line here and `aur-cooldown upgrade` will never select it.
+#
+# Format:  <pkg>  <pkgver-or-commit-prefix>
+# Examples:
+#   claude-code   2.1.199-1
+#   cursor-bin    a1b2c3d
