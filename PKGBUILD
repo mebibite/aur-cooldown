@@ -1,14 +1,16 @@
 # Maintainer: Adrin Jalali <adrin.jalali@gmail.com>
 pkgname=aur-cooldown
-pkgver=0.5.0
+pkgver=0.6.0
 pkgrel=1
-pkgdesc="Age-delay AUR upgrades so malicious or broken pushes are caught before they land"
+pkgdesc="Delay AUR upgrades until they have aged, so malicious pushes are caught before they land"
 arch=('any')
 url="https://github.com/adrinjalali/aur-cooldown"
 license=('MIT')
-depends=('python' 'git' 'yay')
+depends=('python' 'git' 'pacman' 'yay')
+optdepends=('zsh: staleness reminder snippet')
+install="$pkgname.install"
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')  # replace with the real checksum on release
+sha256sums=('SKIP')  # run updpkgsums against the release tarball
 
 package() {
   cd "$pkgname-$pkgver"

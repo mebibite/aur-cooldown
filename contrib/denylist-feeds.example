@@ -1,22 +1,19 @@
-# aur-cooldown denylist FEEDS (opt-in; OFF by default — this file ships as an
-# example and is only read when copied to ~/.config/aur-cooldown/denylist-feeds).
+# Remote denylist feeds for aur-cooldown. Off by default; to enable, copy this
+# file to ~/.config/aur-cooldown/denylist-feeds and uncomment/add URLs.
 #
-# One URL per line. Each URL must return a plain-text list of AUR package NAMES
-# (one per line, '#' comments allowed). Any installed package whose name appears in
-# a feed is FROZEN: aur-cooldown will refuse to upgrade it until it drops off the
-# feed (or you remove the package). Feeds are fetched on `aur-cooldown observe` and
-# `aur-cooldown refresh`, best-effort (a fetch failure keeps the last cache).
+# Each URL must return plain text: one AUR package name per line, '#' comments
+# allowed. Tracked packages appearing on any feed are frozen (never upgraded)
+# until they drop off the feed. Feeds are fetched by `observe` and `refresh`;
+# on fetch failure the previous cache is kept.
 #
-# WHY THIS IS SAFE TO TRUST: a denylist is fail-safe. It can only WITHHOLD an
-# install, never cause one. The worst a stale/compromised/overzealous feed can do
-# is make you wait. So consuming a community list only ever moves you to a MORE
-# conservative posture.
+# Consuming a third-party list is safe here because a denylist can only
+# withhold installs, never cause one. A wrong or stale feed makes you wait,
+# nothing more.
 #
-# Community-maintained list of AUR malware campaigns (package-name granularity),
-# consolidated from the aur-general mailing list + official Arch incident pads:
-#   https://github.com/lenucksi/aur-malware-check
-# Pin to a specific commit for reproducibility instead of a moving branch:
-#   https://raw.githubusercontent.com/lenucksi/aur-malware-check/main/data/campaigns/aur-infected/packages.txt
+# Community-maintained campaign list (aur-general mailing list + official
+# incident notes, consolidated):
 #
-# During an active incident you can also point directly at the official Arch pad
-# for that campaign (announced on https://archlinux.org/news/ and aur-general).
+#https://raw.githubusercontent.com/lenucksi/aur-malware-check/main/data/campaigns/aur-infected/packages.txt
+#
+# During an active incident, the official Arch pad for that campaign (announced
+# on archlinux.org/news and aur-general) can be added directly.

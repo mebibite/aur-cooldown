@@ -1,154 +1,164 @@
 # aur-cooldown
 
-**Age-delay your AUR upgrades.** Install an AUR update only after it has survived
-`N` days (default 7) in the wild, so a malicious or broken push has time to be caught
-before it lands on your machine.
+Delay AUR upgrades until they have aged for a week.
 
-This is a *prevention* tool. For *detection* ("was I already hit by a known campaign?")
-use the excellent [`lenucksi/aur-malware-check`](https://github.com/lenucksi/aur-malware-check) —
-the two are complementary halves (Protect vs Detect/Respond), and `aur-cooldown` can
-consume its package list as a denylist feed (see below).
+The AUR has no review process. When a maintainer account is hijacked or an
+orphaned package is adopted by an attacker, the malicious push reaches everyone
+who updates before it gets noticed. In the incidents of July 2025 (Chaos RAT)
+and June 2026 (400+ packages carrying an infostealer and an eBPF rootkit), the
+bad versions were identified and removed within days. Users who only installed
+versions that had already been public for a week were never exposed.
 
-> **What it is not:** a scanner. It does not inspect PKGBUILDs for malice — most users
-> can't meaningfully review a PKGBUILD, and the design deliberately does not depend on
-> it. The protection is the *delay*, on the assumption that bad pushes are noticed
-> within the cooldown window (the same assumption every "wait before updating"
-> practice already relies on).
-
-## Why
-
-The AUR has no review process. A compromised or hijacked maintainer account can push a
-malicious update that you'd pull the moment you run `yay -Syu`. The June 2026 incident
-(400+ packages, infostealer + rootkit) and the July 2025 Chaos RAT packages are the
-motivating examples. A short cooldown means you only ever install versions that have
-already been exposed to the community for a while.
+aur-cooldown enforces exactly that policy: a version becomes installable once
+it has survived N days (default 7) in the AUR. Detection is the community's
+job; your machine just stays out of the blast window.
 
 ## How it works
 
-Two pieces:
+Two parts, covering two kinds of packages:
 
-1. **The wall** (`contrib/yay-init.lua`) — a yay v13 Lua hook that makes `yay -Syu`
-   refuse any AUR upgrade whose newest revision is younger than 7 days. This covers the
-   ~90% of packages that release less than weekly: they simply wait a week, then upgrade
-   normally. Age comes from the AUR RPC `LastModified` (set server-side at push time).
+The **yay hook** (`contrib/yay-init.lua`, yay v13+) makes `yay -Syu` hold back
+any AUR upgrade whose newest version is less than 7 days old. For the large
+majority of packages, which release less often than weekly, this is the whole
+story: updates arrive one week late, and nothing else changes.
 
-2. **The cooldown tool** (`aur-cooldown`) — for packages that release *more* than once a
-   week (e.g. `claude-code`, `cursor-bin`), whose tip is *always* younger than 7 days and
-   would be pinned forever by the wall. It installs the newest revision that *has* already
-   aged ≥7 days.
+The **aur-cooldown tool** handles packages that release faster than the
+cooldown (editors, AI tools, browsers with weekly builds). Their newest version
+is always "too fresh", so the hook alone would pin them forever. The tool keeps
+a local ledger of every version it has seen, together with the AUR server's
+push timestamp, and installs the newest version that has aged past the
+cooldown, checked out from the package's git history and built with `yay -B`.
 
-The tricky part is doing (2) safely. See **Security model**.
+New installs are unaffected: `yay -S somepkg` behaves as always, and the
+package joins the cooldown from the next `observe` on.
 
-## Security model
+## Installation
 
-Age must be trustworthy. **Git commit dates are not** — any committer sets them freely
-(`GIT_COMMITTER_DATE`; "commit stomping"), and the June 2026 attackers forged commit
-metadata. So age is taken from the AUR RPC `LastModified`, which the server stamps on
-push and the uploader cannot control. Because the RPC only reports it for the *current*
-version, `aur-cooldown observe` captures it over time into a local ledger.
+From the AUR:
 
-Each ledger entry binds a version to the **exact commit** that carried it. At upgrade
-time, the chosen aged version is installed only if its recorded commit:
+    yay -S aur-cooldown
 
-- **still exists** and **is an ancestor of the current HEAD** — so a version that was
-  reset/deleted during incident cleanup is dropped automatically (you wait); and
-- **its `.SRCINFO` still is that version** — so a fresh malicious commit that *reuses* an
-  already-aged version string resolves to the original good commit, not the attacker's.
+From source:
 
-Everything is **fail-closed**: anything unverifiable is skipped, never installed. A
-[denylist](#denylist) adds a reactive layer. The guarantee holds **as long as malice is
-detected within the cooldown window** — that is the one assumption, stated plainly.
+    git clone https://github.com/adrinjalali/aur-cooldown
+    cd aur-cooldown
+    sudo make install        # /usr/local by default
 
-### Threats & residuals
+Dependencies: `python` (3.8+, standard library only), `git`, `pacman`, `yay`.
 
-| Threat | Status |
-|---|---|
-| Commit-date spoofing / backdating | **Defended** — age from server `LastModified`, never git dates |
-| Reusing an aged version string on a new malicious commit | **Defended** — decision bound to the exact commit hash |
-| Reset/force-push cleanup | **Defended** — ancestor-of-HEAD check, fail-closed |
-| RPC MITM | **Mitigated** — HTTPS with certificate verification |
-| Ledger tampering | Out of scope — requires local write access (already game over); protect via normal home-dir permissions |
-| *Forward-fix* leaving malware in canonical history on a fast mover, within the window | **Residual** — narrow; real AUR remediation is reset/delete (which we catch), plus the denylist. See below. |
-| Malice undetected for > cooldown window | **Fundamental limit** of any cooldown; tune `AUR_COOLDOWN_DAYS` |
+Then wire it into your own config:
 
-The forward-fix residual: if a bad version were remediated by committing a *fix on top*
-(leaving the bad commit in history) rather than resetting it away, there is a short window
-(until the fix itself ages in) where a fast mover could select the superseded-but-still-
-canonical bad version. In practice AUR incidents are remediated by removal (deletion /
-`git reset`), which the ancestor check handles; the denylist is the backstop.
+    aur-cooldown setup          # preview with: aur-cooldown setup --print
 
-## Install
+`setup` adds two things, each in a marked block it can update or remove later
+(`aur-cooldown setup --revert`):
 
-**From the AUR** (once published): install `aur-cooldown` with your helper, then run
-`aur-cooldown`'s user setup below.
+1. the yay hook, into `~/.config/yay/init.lua`, so `yay -Syu` holds fresh AUR
+   upgrades (skipped, with a note, if you already have an `UpgradeSelect` hook);
+2. a reminder to your shell rc (`~/.zshrc` or `~/.bashrc`) that tells you when
+   the ledger is stale.
 
-**From source:**
-
-```sh
-git clone https://github.com/adrinjalali/aur-cooldown
-cd aur-cooldown
-sudo make install                # binary + templates to /usr/local
-make setup-user                  # nudge + config templates into your home; prints 2 steps
-```
-
-`make setup-user` seeds `~/.config/aur-cooldown/` and installs the shell reminder, then
-prints the two steps it deliberately won't do for you (they touch files you may own):
-
-1. Add to `~/.zshrc`:
-   ```zsh
-   [[ -f ~/.local/share/aur-cooldown/nudge.zsh ]] && source ~/.local/share/aur-cooldown/nudge.zsh
-   ```
-2. Merge `contrib/yay-init.lua` into `~/.config/yay/init.lua` (the wall).
-
-Requirements: `python` (3.8+, stdlib only), `git`, `yay` (v13+ for the wall), `pacman`.
+Installing the package deliberately does none of this: an Arch package must not
+touch your dotfiles or another package's config, and there is no system-wide
+yay configuration to drop the hook into. `setup` is the supported, reversible
+way to opt in, and you can always do the two steps by hand instead.
 
 ## Usage
 
-```sh
-aur-cooldown observe          # capture versions+commits+push-times; refresh feeds
-aur-cooldown status           # per package: eligible aged version vs current tip
-aur-cooldown upgrade --dry-run # preview what would be installed
-aur-cooldown upgrade          # build & install aged versions, unattended (yay -B)
-```
+    aur-cooldown observe            # record versions and push times; run every few days
+    aur-cooldown status             # eligible aged version vs current tip, per package
+    aur-cooldown upgrade --dry-run  # preview
+    aur-cooldown upgrade            # build and install what has aged in
 
-`observe` is cheap — one batched RPC call (~35 KB for ~60 packages) plus a tiny
-`git ls-remote` only for versions that changed. Run it every few days; the shell nudge
-reminds you. `upgrade` touches git only for packages that actually have a pending aged
-upgrade. Everything else keeps flowing through normal `yay -Syu` (held by the wall).
+`observe` is one batched RPC request (about 35 kB for 60 packages) plus a
+`git ls-remote` per newly seen version. `upgrade` clones package repositories
+only for packages that actually have a pending aged upgrade.
 
-Config (`~/.config/aur-cooldown/`):
+    $ aur-cooldown status
+    last observe: 2026-07-05 16:57 (1d ago)
+    cooldown: 7 days   tracked: 48   frozen by feed: 0
 
-- `packages` — explicit list; if empty/absent, **all installed AUR packages** are tracked.
-- `revoked` — manual denylist: `<pkg> <version-or-commit-prefix>`.
-- `denylist-feeds` — see below.
+      claude-code        eligible: 2.1.191-1 (pushed 2026-06-24)   tip: 2.1.201-1 (pushed 2026-07-04)
+      cursor-bin         eligible: 3.9.8-1 (pushed 2026-06-25)     tip: 3.9.16-1 (pushed 2026-06-28)
+      ...
 
-Environment: `AUR_COOLDOWN_DAYS` (default 7).
+## Configuration
 
-## Denylist
+Everything lives in `~/.config/aur-cooldown/`; all files are optional.
 
-Two layers, both **fail-safe** — a denylist can only *withhold* an install, never cause
-one:
+| File | Purpose |
+|---|---|
+| `packages` | explicit package list, one per line; when absent or empty, every installed AUR package is tracked (`pacman -Qm`, excluding `-debug` split companions) |
+| `revoked` | local denylist, `<pkg> <version-or-commit-prefix>` per line |
+| `denylist-feeds` | remote denylist feed URLs, one per line; off by default |
 
-- **Local** (`revoked`): freeze a specific version or commit you've learned is bad.
-- **Feeds** (`denylist-feeds`, opt-in, off by default): URLs returning AUR package
-  *names* to freeze entirely. Fetched on `observe`/`refresh`, best-effort (a failure
-  keeps the last cache). Point it at the community campaign list
-  ([`lenucksi/aur-malware-check`](https://github.com/lenucksi/aur-malware-check)) and/or,
-  during an incident, the official Arch pad. Because a bad feed can only make you *wait*,
-  consuming a community list only ever makes you more conservative. See
-  `contrib/denylist-feeds.example`.
+State (the ledger) is in `~/.local/share/aur-cooldown/`, git clones and build
+trees in `~/.cache/aur-cooldown/`. `AUR_COOLDOWN_DAYS` overrides the cooldown
+length.
 
-If an installed package appears on a feed, `observe` warns you and `upgrade` refuses to
-touch it. For a full system/IOC scan of a known campaign, use
-[`aur-malware-check`](https://github.com/lenucksi/aur-malware-check).
+## Denylist feeds
 
-## How new installs behave
+A feed is a URL returning AUR package names, one per line. Any tracked package
+that appears on a feed is frozen: `upgrade` refuses to touch it until it drops
+off the feed. Feeds are fetched during `observe` (and by `refresh`); if a fetch
+fails, the previous cache is kept.
 
-`yay -S newpkg` is unaffected — it installs normally and the package auto-enrolls into
-the cooldown on the next `observe`. A brand-new package can't be aged on first sight
-(there's no prior authoritative timestamp for it), so first installs are a deliberate,
-conscious action outside the tool's scope.
+Feeds are safe to consume from third parties because a denylist is fail-safe:
+it can only withhold an install, never cause one. The worst a wrong or stale
+feed does is make you wait.
+
+A good feed is the community-maintained campaign list from
+[aur-malware-check](https://github.com/lenucksi/aur-malware-check), which
+consolidates the aur-general mailing list and the official incident notes. Be
+aware that it is name-level: a listed package was part of a campaign, which
+does not necessarily mean your installed build is affected. See
+`denylist-feeds.example` in the share directory.
+
+## Security model
+
+The cooldown is only as good as the clock it trusts, and the obvious clock is
+the one that cannot be trusted: git commit dates are chosen by whoever makes
+the commit, and the June 2026 attackers forged commit metadata to pose as a
+long-standing maintainer. A tool that measured age with `git log` would accept
+a malicious commit backdated by eight days as already aged.
+
+aur-cooldown therefore never reads dates from git. Age comes from the AUR RPC
+`LastModified` field, which the server sets when a push is accepted and the
+uploader cannot influence. Since the RPC only reports it for the current
+version, `observe` records it over time; that is why the ledger exists.
+
+Each observation binds the version to the exact git commit that carried it,
+captured between two RPC snapshots so that a push landing mid-observation
+cannot associate a different commit with an older timestamp. At upgrade time a
+version is built only if its recorded commit is still part of the package's
+current history, and the build uses the oldest commit in that history carrying
+the version. The practical consequences:
+
+| Scenario | Outcome |
+|---|---|
+| Malicious push, backdated commit date | not eligible; its server timestamp is fresh |
+| Malicious push reusing an already-aged version string | the oldest commit with that version is built, which is the original clean one |
+| Bad version removed by AUR staff (delete or reset, the usual cleanup) | recorded commit gone from history; skipped, tool waits |
+| Version we never observed | never installed |
+| Feed or network failure | previous state kept; nothing new becomes installable |
+
+Everything unverifiable fails closed: the tool waits rather than installs.
+
+Known limits, stated plainly:
+
+- The guarantee is conditional on detection: a malicious version that stays
+  unnoticed longer than the cooldown will age in and be installed. The cooldown
+  length is the knob; 7 days covered both known incidents comfortably.
+- If a compromise were cleaned up by committing a fix on top while leaving the
+  malicious commit in history (not how AUR staff have handled incidents, which
+  is deletion or reset), a fast-moving package could select the superseded bad
+  version during the window before the fix ages in. The denylist is the
+  backstop for this case.
+- aur-cooldown does not inspect package contents. It is not a scanner and does
+  not replace one; for checking whether a machine was already affected by a
+  known campaign, use
+  [aur-malware-check](https://github.com/lenucksi/aur-malware-check).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT.
