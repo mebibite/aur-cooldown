@@ -25,3 +25,6 @@ First public release.
 - `aur-cooldown setup` wires the hook and reminder into your own config in
   reversible, marker-delimited blocks (`--print` to preview, `--revert` to
   undo). Package installation never edits user files, per Arch guidelines.
+  `setup` skips the yay hook when yay is not on `PATH`.
+- Ships zsh and bash completions (subcommands, flags, and installed AUR
+  package names), installed into the standard completion directories.

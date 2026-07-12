@@ -1,0 +1,53 @@
+#compdef aur-cooldown
+
+# zsh completion for aur-cooldown.
+
+_aur-cooldown_packages() {
+  local -a pkgs
+  pkgs=(${(f)"$(pacman -Qmq 2>/dev/null)"})
+  _describe -t packages 'installed AUR package' pkgs
+}
+
+_aur-cooldown() {
+  local curcontext="$curcontext" state line
+  local -a commands
+  commands=(
+    'observe:record current versions and push times'
+    'upgrade:install versions that aged past the cooldown'
+    'status:show eligible versions vs current tips'
+    'refresh:re-fetch the denylist feeds'
+    'setup:wire the yay hook and shell reminder into your config'
+  )
+
+  _arguments -C \
+    '(- *)--version[show program version and exit]' \
+    '(- *)'{-h,--help}'[show help and exit]' \
+    '1: :->cmd' \
+    '*:: :->args' \
+    && return
+
+  case $state in
+    cmd)
+      _describe -t commands 'aur-cooldown command' commands
+      ;;
+    args)
+      case $line[1] in
+        observe|status)
+          _aur-cooldown_packages
+          ;;
+        upgrade)
+          _arguments \
+            '--dry-run[show what would be built, install nothing]' \
+            '*: :_aur-cooldown_packages'
+          ;;
+        setup)
+          _arguments \
+            '(--revert)--print[show what would change, write nothing]' \
+            '(--print)--revert[remove what setup added]'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_aur-cooldown "$@"
