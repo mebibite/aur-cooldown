@@ -572,7 +572,10 @@ def cmd_setup(args):
     yay_init = os.path.join(XDG_CONFIG, "yay", "init.lua")
     ystart, yend = "-- >>> aur-cooldown >>>", "-- <<< aur-cooldown <<<"
     current = open(yay_init).read() if os.path.exists(yay_init) else ""
-    if mode == "apply" and ystart not in current and "UpgradeSelect" in current:
+    if mode == "apply" and shutil.which("yay") is None:
+        print(f"    {yay_init}: yay not found on PATH; skipping the hook.\n"
+              f"      Install yay (v13+) and re-run 'aur-cooldown setup' to add it.")
+    elif mode == "apply" and ystart not in current and "UpgradeSelect" in current:
         print(f"    {yay_init}: another UpgradeSelect hook is present; not touching it.\n"
               f"      Merge {os.path.join(share, 'yay-init.lua')} by hand, or remove the old hook.")
     else:
