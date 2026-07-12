@@ -435,20 +435,34 @@ def cmd_upgrade(args):
     if args.dry_run:
         print("\nDry run; re-run without --dry-run to build and install.")
         return
+    if not args.yes:
+        if not sys.stdin.isatty():
+            sys.exit("aur-cooldown: not a terminal; pass -y to build without asking.")
+        try:
+            reply = input(f"\n:: Build and install {len(plan)} package(s)? [Y/n] ")
+        except EOFError:
+            reply = "n"
+        if reply.strip().lower() not in ("", "y", "yes"):
+            print("aborted.")
+            return
 
     built, failed = [], []
     for pkg, d in plan:
-        worktree = os.path.join(CACHE, "build", pkg)
-        run(["git", "-C", d["repo"], "worktree", "remove", "--force", worktree],
-            check=False)
-        shutil.rmtree(worktree, ignore_errors=True)
-        run(["git", "-C", d["repo"], "worktree", "add", "-q", "--detach",
-             worktree, d["commit"]], env=GIT_ENV)
+        build = os.path.join(CACHE, "build", pkg)
+        shutil.rmtree(build, ignore_errors=True)
+        os.makedirs(build, exist_ok=True)
+        # Export the exact pinned commit as a plain tree with no .git, so yay
+        # builds precisely that revision and never tries to fetch or merge a
+        # newer one (a git worktree makes yay's merge step fail, and would risk
+        # advancing past the commit we vetted).
+        tar = subprocess.run(
+            ["git", "-C", d["repo"], "archive", "--format=tar", d["commit"]],
+            check=True, stdout=subprocess.PIPE)
+        subprocess.run(["tar", "-x", "-C", build], input=tar.stdout, check=True)
         print(f"\nbuilding {pkg} {d['version']} (AUR revision {d['commit'][:8]})")
-        rc = subprocess.run(["yay", "-B", "--noconfirm", worktree]).returncode
+        rc = subprocess.run(["yay", "-B", "--noconfirm", build]).returncode
         (built if rc == 0 else failed).append(pkg)
-        run(["git", "-C", d["repo"], "worktree", "remove", "--force", worktree],
-            check=False)
+        shutil.rmtree(build, ignore_errors=True)
     print(f"\nbuilt: {', '.join(built) or 'none'}"
           + (f"  failed: {', '.join(failed)}" if failed else ""))
 
@@ -611,7 +625,10 @@ def main():
     p.set_defaults(fn=cmd_observe)
 
     p = sub.add_parser("upgrade", help="install versions that aged past the cooldown")
-    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--dry-run", action="store_true",
+                   help="show what would be built, install nothing")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="build and install without asking for confirmation")
     p.add_argument("pkgs", nargs="*")
     p.set_defaults(fn=cmd_upgrade)
 

@@ -38,6 +38,7 @@ _aur-cooldown() {
         upgrade)
           _arguments \
             '--dry-run[show what would be built, install nothing]' \
+            '(-y --yes)'{-y,--yes}'[build and install without asking]' \
             '*: :_aur-cooldown_packages'
           ;;
         setup)

@@ -36,7 +36,7 @@ _aur_cooldown() {
             ;;
         upgrade)
             if [[ $cur == -* ]]; then
-                COMPREPLY=($(compgen -W '--dry-run' -- "$cur"))
+                COMPREPLY=($(compgen -W '--dry-run -y --yes' -- "$cur"))
             else
                 pkgs=$(pacman -Qmq 2>/dev/null)
                 COMPREPLY=($(compgen -W "$pkgs" -- "$cur"))

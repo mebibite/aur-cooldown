@@ -28,3 +28,10 @@ First public release.
   `setup` skips the yay hook when yay is not on `PATH`.
 - Ships zsh and bash completions (subcommands, flags, and installed AUR
   package names), installed into the standard completion directories.
+- `upgrade` asks for confirmation before building anything (pacman-style
+  `[Y/n]`); `-y`/`--yes` skips the prompt for unattended runs. Without a
+  terminal it refuses unless `-y` is given.
+- `upgrade` builds the pinned commit from a plain exported tree (`git
+  archive`) instead of a detached-HEAD worktree. This fixes a `yay -B`
+  failure ("fatal: No current branch") and ensures the build cannot drift
+  off the vetted commit.

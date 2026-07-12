@@ -68,7 +68,11 @@ way to opt in, and you can always do the two steps by hand instead.
     aur-cooldown observe            # record versions and push times; run every few days
     aur-cooldown status             # eligible aged version vs current tip, per package
     aur-cooldown upgrade --dry-run  # preview
-    aur-cooldown upgrade            # build and install what has aged in
+    aur-cooldown upgrade            # build and install what has aged in (asks first)
+    aur-cooldown upgrade -y         # same, without the confirmation prompt
+
+`upgrade` shows the plan and asks before it builds or installs anything
+(pacman-style `[Y/n]`); pass `-y` for unattended runs.
 
 `observe` is one batched RPC request (about 35 kB for 60 packages) plus a
 `git ls-remote` per newly seen version. `upgrade` clones package repositories
