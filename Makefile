@@ -14,6 +14,7 @@ install:
 	install -Dm644 contrib/packages.example        $(SHAREDIR)/packages.example
 	install -Dm644 contrib/revoked.example         $(SHAREDIR)/revoked.example
 	install -Dm644 contrib/denylist-feeds.example  $(SHAREDIR)/denylist-feeds.example
+	install -Dm644 contrib/config.example          $(SHAREDIR)/config.example
 	install -Dm644 contrib/completions/_aur-cooldown       $(ZSHCOMP)/_aur-cooldown
 	install -Dm644 contrib/completions/aur-cooldown.bash   $(BASHCOMP)/aur-cooldown
 	@echo

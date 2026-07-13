@@ -40,3 +40,14 @@ First public release.
 - `upgrade` now lists held packages instead of only counting them: which
   version is cooling and the day it becomes eligible, and separately which
   installed packages have not been observed yet.
+- `upgrade` escalates the install itself instead of relying on `makepkg -si`:
+  it builds as the user, then installs the built package as root through a
+  configurable command. Defaults to `sudo`, falling back to `su`, and honours
+  `--sudo`/`--sudoflags` or a `sudo` line in `~/.config/aur-cooldown/config`
+  (mirroring yay). This makes it work for users who escalate with `su` or
+  `doas` rather than `sudo`. Repository dependencies are installed the same
+  way; AUR dependencies are still not resolved.
+- `aur-cooldown setup` detects a `yay --sudo=<bin>` preference in your shell rc
+  and writes the matching `config`, so `upgrade` escalates like your yay does.
+- Before every privileged step, `upgrade` prints the exact command it is about
+  to run as root (e.g. `running as root: su -c 'pacman -U ...'`).

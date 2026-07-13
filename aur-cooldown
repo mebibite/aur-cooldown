@@ -31,8 +31,11 @@ Environment: AUR_COOLDOWN_DAYS overrides the cooldown length.
 """
 
 import argparse
+import glob
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -58,6 +61,7 @@ FEED_CACHE = os.path.join(STATE, "denylist-feed.cache")
 PKGCONF = os.path.join(CONFDIR, "packages")
 DENY = os.path.join(CONFDIR, "revoked")
 FEEDSCONF = os.path.join(CONFDIR, "denylist-feeds")
+CONFIGFILE = os.path.join(CONFDIR, "config")
 
 RPC = "https://aur.archlinux.org/rpc/v5/info"
 GITBASE = "https://aur.archlinux.org"
@@ -83,6 +87,80 @@ def ensure_dirs():
 def run(cmd, check=True, env=None):
     return subprocess.run(cmd, check=check, env=env, text=True,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+# --- config + privilege escalation -------------------------------------------
+
+def read_config():
+    """Parse ~/.config/aur-cooldown/config: 'key = value' lines, # comments."""
+    conf = {}
+    if os.path.exists(CONFIGFILE):
+        for line in open(CONFIGFILE):
+            line = line.split("#", 1)[0].strip()
+            if "=" in line:
+                k, v = line.split("=", 1)
+                conf[k.strip()] = v.strip()
+    return conf
+
+
+def resolve_sudo(args):
+    """The command used to gain root, mirroring yay's --sudo/--sudoflags.
+
+    Precedence: command line, then the config file, then makepkg's own default
+    (sudo if present, else su). We escalate the install ourselves rather than
+    hand PACMAN_AUTH to makepkg, because that variable is a bash array makepkg
+    reads from its config, not something an exported string can set.
+    """
+    conf = read_config()
+    sudo = args.sudo or conf.get("sudo") or ("sudo" if shutil.which("sudo") else "su")
+    flags = args.sudoflags if args.sudoflags is not None else conf.get("sudoflags", "")
+    return sudo, shlex.split(flags)
+
+
+def as_root(cmd, sudo, flags):
+    """Wrap a command so it runs as root via the chosen escalator.
+
+    su takes its command as a single string (su [flags] -c '<cmd>'); sudo and
+    friends take it as trailing arguments (sudo [flags] <cmd>).
+    """
+    if os.path.basename(sudo) == "su":
+        return [sudo, *flags, "-c", shlex.join(cmd)]
+    return [sudo, *flags, *cmd]
+
+
+def run_root(cmd, sudo, flags):
+    """Run a command as root, printing exactly what is being escalated first."""
+    full = as_root(cmd, sudo, flags)
+    print(f"  running as root: {shlex.join(full)}")
+    return subprocess.run(full).returncode
+
+
+_DEP_LINE = re.compile(r"^\s*(?:make|check)?depends(?:_\w+)?\s*=\s*(.+?)\s*$")
+
+
+def install_deps(build, sudo, flags):
+    """Install any missing repo dependencies of the exported PKGBUILD.
+
+    Returns True if all dependencies are satisfied afterwards. Only official
+    repositories are consulted (pacman); an unmet AUR dependency returns False.
+    """
+    srcinfo = os.path.join(build, ".SRCINFO")
+    if not os.path.exists(srcinfo):
+        return True
+    atoms = []
+    for line in open(srcinfo):
+        m = _DEP_LINE.match(line)
+        if m:
+            atoms.append(m.group(1))
+    if not atoms:
+        return True
+    unmet = run(["pacman", "-T", *atoms], check=False).stdout.split()
+    names = sorted({re.split(r"[<>=:]", a, 1)[0] for a in unmet})
+    if not names:
+        return True
+    print(f"  installing dependencies: {' '.join(names)}")
+    return run_root(["pacman", "-S", "--needed", "--asdeps", "--noconfirm", *names],
+                    sudo, flags) == 0
 
 
 # --- target selection --------------------------------------------------------
@@ -432,6 +510,7 @@ def cmd_upgrade(args):
     rows = load_ledger()
     deny = local_denylist()
     feed = load_feed_names()
+    sudo, flags = resolve_sudo(args)
     cutoff = now() - DAYS * 86400
     names, is_auto = targets(args.pkgs)
     print(f"cooldown {DAYS} days: eligible if pushed on or before {day(cutoff)}\n")
@@ -490,26 +569,52 @@ def cmd_upgrade(args):
             print("aborted.")
             return
 
-    built, failed = [], []
+    # We drive root ourselves (like yay does) rather than let makepkg -si pick
+    # sudo: the user may escalate with su, and makepkg would otherwise fail.
+    # Build everything as the normal user first, then install all the results
+    # in one transaction, so su is asked for the password only once.
+    failed, ready = [], []   # ready: (pkg, build_dir, [artifacts])
     for pkg, d in plan:
         build = os.path.join(CACHE, "build", pkg)
         shutil.rmtree(build, ignore_errors=True)
         os.makedirs(build, exist_ok=True)
-        # Export the exact pinned commit as a plain tree with no .git and build
-        # it with makepkg. yay -B is unusable here: it treats the build dir as a
-        # git clone to update (reset/merge to the latest commit), which both
-        # errors on our export and would defeat the whole point of building an
-        # older, aged revision. makepkg builds precisely this tree, pulls repo
-        # dependencies through pacman (-s), and installs the result (-i).
+        # Export the exact pinned commit as a plain tree with no .git. yay -B is
+        # unusable here: it treats the build dir as a git clone to update to the
+        # latest commit, which both errors on our export and would defeat the
+        # point of building an older, vetted revision.
         tar = subprocess.run(
             ["git", "-C", d["repo"], "archive", "--format=tar", d["commit"]],
             check=True, stdout=subprocess.PIPE)
         subprocess.run(["tar", "-x", "-C", build], input=tar.stdout, check=True)
         print(f"\nbuilding {pkg} {d['version']} (AUR revision {d['commit'][:8]})")
-        rc = subprocess.run(["makepkg", "-si", "--noconfirm", "--needed"],
-                            cwd=build).returncode
-        (built if rc == 0 else failed).append(pkg)
-        shutil.rmtree(build, ignore_errors=True)
+
+        if not install_deps(build, sudo, flags):
+            print(f"  -> could not install dependencies for {pkg} "
+                  f"(AUR dependencies are not resolved; install them first)")
+            failed.append(pkg)
+            continue
+        if subprocess.run(["makepkg", "-f", "--noconfirm"], cwd=build).returncode:
+            failed.append(pkg)
+            continue
+        artifacts = [p for p in sorted(glob.glob(os.path.join(build, "*.pkg.tar.*")))
+                     if not p.endswith(".sig") and "-debug-" not in os.path.basename(p)]
+        if not artifacts:
+            print(f"  -> makepkg produced no package for {pkg}")
+            failed.append(pkg)
+            continue
+        ready.append((pkg, build, artifacts))
+
+    built = []
+    if ready:
+        files = [f for _, _, arts in ready for f in arts]
+        print(f"\ninstalling {len(ready)} package(s)")
+        rc = run_root(["pacman", "-U", "--noconfirm", *files], sudo, flags)
+        if rc == 0:
+            built = [pkg for pkg, _, _ in ready]
+            for _, build, _ in ready:
+                shutil.rmtree(build, ignore_errors=True)
+        else:
+            failed += [pkg for pkg, _, _ in ready]
     print(f"\nbuilt: {', '.join(built) or 'none'}"
           + (f"  failed: {', '.join(failed)}" if failed else ""))
 
@@ -580,6 +685,28 @@ def shell_rc():
     if "bash" in sh:
         return os.path.join(HOME, ".bashrc"), "bash"
     return None, sh or "sh"
+
+
+def detect_yay_escalator():
+    """Read the user's shell rc for a 'yay --sudo=<bin>' preference.
+
+    Users who escalate with su typically set it once as a yay alias
+    (alias yay='yay --sudo=su'); mirroring it means 'upgrade' installs the
+    same way yay does without extra configuration. Returns (bin, flags) or None.
+    """
+    rc, _ = shell_rc()
+    if not rc or not os.path.exists(rc):
+        return None
+    for line in open(rc):
+        if "yay" not in line or "--sudo" not in line:
+            continue
+        mbin = re.search(r"--sudo[=\s]+(\S+)", line)
+        if not mbin:
+            continue
+        mflags = re.search(r"--sudoflags[=\s]+(\"[^\"]*\"|'[^']*'|\S+)", line)
+        flags = mflags.group(1).strip("\"'") if mflags else ""
+        return mbin.group(1).strip("\"'"), flags
+    return None
 
 
 def strip_block(text, start, end):
@@ -653,6 +780,23 @@ def cmd_setup(args):
     else:
         print(write_block(rc, sstart, send, f'[ -f "{nudge}" ] && . "{nudge}"', mode))
 
+    # 3. mirror yay's escalator (yay --sudo=<bin>) into our config, so upgrade
+    #    installs the same way yay does. Only when the user hasn't set one.
+    esc = detect_yay_escalator()
+    if esc and esc[0] != "sudo":
+        sudo, sudoflags = esc
+        if mode == "print":
+            print(f"    would set 'sudo = {sudo}' in {CONFIGFILE} "
+                  f"(matching your yay --sudo)")
+        elif mode == "apply" and not read_config().get("sudo"):
+            os.makedirs(CONFDIR, exist_ok=True)
+            with open(CONFIGFILE, "a") as f:
+                f.write(f"sudo = {sudo}\n")
+                if sudoflags:
+                    f.write(f"sudoflags = {sudoflags}\n")
+            print(f"    {CONFIGFILE}: sudo = {sudo}"
+                  f"{' ' + sudoflags if sudoflags else ''} (from your yay --sudo)")
+
     if mode == "apply":
         print("\nDone. Open a new shell for the reminder, then run 'aur-cooldown observe'.")
     elif mode == "print":
@@ -676,6 +820,10 @@ def main():
                    help="show what would be built, install nothing")
     p.add_argument("-y", "--yes", action="store_true",
                    help="build and install without asking for confirmation")
+    p.add_argument("--sudo", metavar="BIN",
+                   help="command used to gain root (default: sudo, else su)")
+    p.add_argument("--sudoflags", metavar="FLAGS",
+                   help="extra flags passed to the sudo command")
     p.add_argument("pkgs", nargs="*")
     p.set_defaults(fn=cmd_upgrade)
 

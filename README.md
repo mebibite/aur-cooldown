@@ -53,13 +53,15 @@ Then wire it into your own config:
 
     aur-cooldown setup          # preview with: aur-cooldown setup --print
 
-`setup` adds two things, each in a marked block it can update or remove later
-(`aur-cooldown setup --revert`):
+`setup` wires up three things (the first two in a marked block it can update or
+remove later with `aur-cooldown setup --revert`):
 
 1. the yay hook, into `~/.config/yay/init.lua`, so `yay -Syu` holds fresh AUR
    upgrades (skipped, with a note, if you already have an `UpgradeSelect` hook);
 2. a reminder to your shell rc (`~/.zshrc` or `~/.bashrc`) that tells you when
-   the ledger is stale.
+   the ledger is stale;
+3. if you run yay with `--sudo`, the matching `sudo` setting in
+   `~/.config/aur-cooldown/config`, so installs escalate the same way.
 
 Installing the package deliberately does none of this: an Arch package must not
 touch your dotfiles or another package's config, and there is no system-wide
@@ -98,6 +100,20 @@ Everything lives in `~/.config/aur-cooldown/`; all files are optional.
 | `packages` | explicit package list, one per line; when absent or empty, every installed AUR package is tracked (`pacman -Qm`, excluding `-debug` split companions) |
 | `revoked` | local denylist, `<pkg> <version-or-commit-prefix>` per line |
 | `denylist-feeds` | remote denylist feed URLs, one per line; off by default |
+| `config` | `key = value` settings; currently `sudo` and `sudoflags` |
+
+### Gaining root for the install
+
+`upgrade` builds the package as your user, then installs it as root. Like yay,
+it uses `sudo` by default and falls back to `su` when `sudo` is not installed.
+If you escalate with `su` (or `doas`, etc.), set it once:
+
+    # ~/.config/aur-cooldown/config
+    sudo = su
+
+or pass it per run: `aur-cooldown upgrade --sudo su --sudoflags '-l'`. If you
+already tell yay which command to use (`yay --sudo=su`), `aur-cooldown setup`
+detects that and writes the matching `config` for you.
 
 State (the ledger) is in `~/.local/share/aur-cooldown/`, git clones and build
 trees in `~/.cache/aur-cooldown/`. `AUR_COOLDOWN_DAYS` overrides the cooldown
