@@ -31,7 +31,12 @@ First public release.
 - `upgrade` asks for confirmation before building anything (pacman-style
   `[Y/n]`); `-y`/`--yes` skips the prompt for unattended runs. Without a
   terminal it refuses unless `-y` is given.
-- `upgrade` builds the pinned commit from a plain exported tree (`git
-  archive`) instead of a detached-HEAD worktree. This fixes a `yay -B`
-  failure ("fatal: No current branch") and ensures the build cannot drift
-  off the vetted commit.
+- `upgrade` builds the pinned commit by exporting it (`git archive`) to a
+  plain tree and running `makepkg`. `yay -B` was unusable: it treats the
+  build directory as a git clone to update to the latest commit, which
+  errored on the export and would have defeated the point of building an
+  older, vetted revision. `makepkg` builds exactly the exported tree and
+  cannot drift off the commit aur-cooldown selected.
+- `upgrade` now lists held packages instead of only counting them: which
+  version is cooling and the day it becomes eligible, and separately which
+  installed packages have not been observed yet.

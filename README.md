@@ -27,7 +27,8 @@ cooldown (editors, AI tools, browsers with weekly builds). Their newest version
 is always "too fresh", so the hook alone would pin them forever. The tool keeps
 a local ledger of every version it has seen, together with the AUR server's
 push timestamp, and installs the newest version that has aged past the
-cooldown, checked out from the package's git history and built with `yay -B`.
+cooldown, exported from the package's git history at the exact vetted commit
+and built with `makepkg`.
 
 New installs are unaffected: `yay -S somepkg` behaves as always, and the
 package joins the cooldown from the next `observe` on.
@@ -44,7 +45,9 @@ From source:
     cd aur-cooldown
     sudo make install        # /usr/local by default
 
-Dependencies: `python` (3.8+, standard library only), `git`, `pacman`, `yay`.
+Dependencies: `python` (3.8+, standard library only), `git`, `pacman`,
+`base-devel` (for `makepkg`). `yay` is optional and only needed for the
+`yay -Syu` cooldown hook that `setup` installs.
 
 Then wire it into your own config:
 

@@ -178,6 +178,32 @@ def aged_versions(pkg, cutoff, rows):
                   key=lambda e: e["last_modified"], reverse=True)
 
 
+def cooling_info(pkg, installed, rows):
+    """Why a package has no eligible version yet, for the 'none' case.
+
+    Returns a detail dict: 'cooling' with the version that ages in first and
+    the timestamp it becomes eligible, 'unobserved' if we have no record of it
+    yet, or 'current' if everything we have observed is already installed.
+    """
+    newer = {}
+    seen_any = False
+    for r in rows:
+        if r.get("pkg") != pkg or not r.get("commit"):
+            continue
+        seen_any = True
+        v, lm = r["version"], int(r["last_modified"])
+        if installed and vercmp(v, installed) <= 0:
+            continue
+        newer[v] = min(lm, newer.get(v, lm))
+    if not newer:
+        return {"state": "current" if seen_any else "unobserved"}
+    # Whichever newer version was pushed earliest ages in first, and that is
+    # what the next 'upgrade' installs; report it and when its cooldown ends.
+    version, pushed = min(newer.items(), key=lambda kv: kv[1])
+    return {"state": "cooling", "version": version,
+            "eligible": pushed + DAYS * 86400}
+
+
 # --- denylist ----------------------------------------------------------------
 
 def local_denylist():
@@ -359,7 +385,7 @@ def resolve(pkg, cutoff, rows, deny, feed, is_auto):
 
     aged = aged_versions(pkg, cutoff, rows)
     if not aged:
-        return "none", None
+        return "none", cooling_info(pkg, installed, rows)
 
     base = base_for(pkg, rows) or pkg
     repo = ancestry = None
@@ -410,8 +436,8 @@ def cmd_upgrade(args):
     names, is_auto = targets(args.pkgs)
     print(f"cooldown {DAYS} days: eligible if pushed on or before {day(cutoff)}\n")
 
-    plan = []
-    quiet = {"up-to-date": 0, "none": 0, "not-installed": 0}
+    plan, cooling, unobserved = [], [], []
+    up_to_date = 0
     for pkg in names:
         action, d = resolve(pkg, cutoff, rows, deny, feed, is_auto)
         if action == "build":
@@ -425,10 +451,28 @@ def cmd_upgrade(args):
             print(f"  {pkg:30} aged version no longer in canonical history, waiting")
         elif action == "error":
             print(f"  {pkg:30} error: {d['msg']}")
-        else:
-            quiet[action] += 1
-    print(f"\n{quiet['up-to-date']} up to date, {quiet['none']} still cooling down "
-          f"or not yet observed.")
+        elif action == "none" and d and d["state"] == "cooling":
+            cooling.append((pkg, d))
+        elif action == "none" and d and d["state"] == "unobserved":
+            unobserved.append(pkg)
+        else:  # up-to-date, not-installed, or observed-and-current
+            up_to_date += 1
+
+    if cooling:
+        print("\nstill cooling down (held until aged in):")
+        for pkg, d in sorted(cooling, key=lambda t: t[1]["eligible"]):
+            wait = max(0, (d["eligible"] - now()) // 86400 + 1)
+            print(f"  {pkg:30} {d['version']:20} eligible {day(d['eligible'])} "
+                  f"(in {wait}d)")
+    if unobserved:
+        print("\nnot yet observed (run 'aur-cooldown observe' a few times):")
+        for pkg in sorted(unobserved):
+            print(f"  {pkg}")
+
+    tail = f"{up_to_date} up to date, {len(cooling)} cooling down"
+    if unobserved:
+        tail += f", {len(unobserved)} not yet observed"
+    print(f"\n{tail}.")
 
     if not plan:
         return
@@ -451,16 +495,19 @@ def cmd_upgrade(args):
         build = os.path.join(CACHE, "build", pkg)
         shutil.rmtree(build, ignore_errors=True)
         os.makedirs(build, exist_ok=True)
-        # Export the exact pinned commit as a plain tree with no .git, so yay
-        # builds precisely that revision and never tries to fetch or merge a
-        # newer one (a git worktree makes yay's merge step fail, and would risk
-        # advancing past the commit we vetted).
+        # Export the exact pinned commit as a plain tree with no .git and build
+        # it with makepkg. yay -B is unusable here: it treats the build dir as a
+        # git clone to update (reset/merge to the latest commit), which both
+        # errors on our export and would defeat the whole point of building an
+        # older, aged revision. makepkg builds precisely this tree, pulls repo
+        # dependencies through pacman (-s), and installs the result (-i).
         tar = subprocess.run(
             ["git", "-C", d["repo"], "archive", "--format=tar", d["commit"]],
             check=True, stdout=subprocess.PIPE)
         subprocess.run(["tar", "-x", "-C", build], input=tar.stdout, check=True)
         print(f"\nbuilding {pkg} {d['version']} (AUR revision {d['commit'][:8]})")
-        rc = subprocess.run(["yay", "-B", "--noconfirm", build]).returncode
+        rc = subprocess.run(["makepkg", "-si", "--noconfirm", "--needed"],
+                            cwd=build).returncode
         (built if rc == 0 else failed).append(pkg)
         shutil.rmtree(build, ignore_errors=True)
     print(f"\nbuilt: {', '.join(built) or 'none'}"

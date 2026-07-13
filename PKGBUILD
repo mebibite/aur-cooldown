@@ -6,8 +6,9 @@ pkgdesc="Delay AUR upgrades until they have aged, so malicious pushes are caught
 arch=('any')
 url="https://github.com/adrinjalali/aur-cooldown"
 license=('MIT')
-depends=('python' 'git' 'pacman' 'yay')
-optdepends=('zsh: staleness reminder snippet')
+depends=('python' 'git' 'pacman' 'base-devel')
+optdepends=('yay: yay -Syu cooldown hook, wired by "aur-cooldown setup"'
+            'zsh: staleness reminder snippet')
 install="$pkgname.install"
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')  # run updpkgsums against the release tarball
