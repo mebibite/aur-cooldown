@@ -55,6 +55,7 @@ STATE = os.environ.get("AUR_COOLDOWN_STATE", os.path.join(XDG_DATA, "aur-cooldow
 CACHE = os.environ.get("AUR_COOLDOWN_CACHE", os.path.join(XDG_CACHE, "aur-cooldown"))
 CONFDIR = os.path.join(XDG_CONFIG, "aur-cooldown")
 
+SRCDEST = os.path.join(CACHE, "sources")
 LEDGER = os.path.join(STATE, "ledger.jsonl")
 LASTOBS = os.path.join(STATE, "last-observe")
 FEED_CACHE = os.path.join(STATE, "denylist-feed.cache")
@@ -593,7 +594,14 @@ def cmd_upgrade(args):
                   f"(AUR dependencies are not resolved; install them first)")
             failed.append(pkg)
             continue
-        if subprocess.run(["makepkg", "-f", "--noconfirm"], cwd=build).returncode:
+        # Download sources into a persistent cache (like yay's SRCDEST) so a
+        # rebuild after a failure reuses the files makepkg already fetched and
+        # checksummed, instead of downloading them again. makepkg defaults
+        # SRCDEST to the build dir, which we wipe on every run.
+        os.makedirs(SRCDEST, exist_ok=True)
+        makepkg_env = dict(os.environ, SRCDEST=SRCDEST)
+        if subprocess.run(["makepkg", "-f", "--noconfirm"],
+                          cwd=build, env=makepkg_env).returncode:
             failed.append(pkg)
             continue
         artifacts = [p for p in sorted(glob.glob(os.path.join(build, "*.pkg.tar.*")))

@@ -51,3 +51,7 @@ First public release.
   and writes the matching `config`, so `upgrade` escalates like your yay does.
 - Before every privileged step, `upgrade` prints the exact command it is about
   to run as root (e.g. `running as root: su -c 'pacman -U ...'`).
+- `upgrade` downloads sources into a persistent cache (`SRCDEST`,
+  `~/.cache/aur-cooldown/sources`) instead of the throwaway build tree, so a
+  rebuild after a failure reuses the already-fetched, checksummed files rather
+  than downloading them again.

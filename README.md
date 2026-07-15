@@ -115,9 +115,11 @@ or pass it per run: `aur-cooldown upgrade --sudo su --sudoflags '-l'`. If you
 already tell yay which command to use (`yay --sudo=su`), `aur-cooldown setup`
 detects that and writes the matching `config` for you.
 
-State (the ledger) is in `~/.local/share/aur-cooldown/`, git clones and build
-trees in `~/.cache/aur-cooldown/`. `AUR_COOLDOWN_DAYS` overrides the cooldown
-length.
+State (the ledger) is in `~/.local/share/aur-cooldown/`; git clones, build
+trees, and downloaded sources are in `~/.cache/aur-cooldown/`. Sources are
+cached (in `sources/`) and reused across rebuilds like yay does, so a retry
+after a failed build does not download them again; delete that directory to
+reclaim the space. `AUR_COOLDOWN_DAYS` overrides the cooldown length.
 
 ## Denylist feeds
 
