@@ -4,10 +4,13 @@ Delay AUR upgrades until they have aged for a week.
 
 The AUR has no review process. When a maintainer account is hijacked or an
 orphaned package is adopted by an attacker, the malicious push reaches everyone
-who updates before it gets noticed. In the incidents of July 2025 (Chaos RAT)
-and June 2026 (400+ packages carrying an infostealer and an eBPF rootkit), the
-bad versions were identified and removed within days. Users who only installed
-versions that had already been public for a week were never exposed.
+who updates before it gets noticed. In the incidents of
+[July 2025](https://www.bleepingcomputer.com/news/security/arch-linux-pulls-aur-packages-that-installed-chaos-rat-malware/)
+(three browser packages carrying the Chaos RAT) and
+[June 2026](https://www.bleepingcomputer.com/news/security/over-400-arch-linux-packages-compromised-to-push-rootkit-infostealer/)
+(400+ packages carrying an infostealer and an eBPF rootkit), the malicious
+versions were flagged and pulled within days. Users who only installed versions
+that had already been public for a week were never exposed.
 
 aur-cooldown enforces exactly that policy: a version becomes installable once
 it has survived N days (default 7) in the AUR. Detection is the community's
@@ -143,9 +146,9 @@ does not necessarily mean your installed build is affected. See
 
 The cooldown is only as good as the clock it trusts, and the obvious clock is
 the one that cannot be trusted: git commit dates are chosen by whoever makes
-the commit, and the June 2026 attackers forged commit metadata to pose as a
-long-standing maintainer. A tool that measured age with `git log` would accept
-a malicious commit backdated by eight days as already aged.
+the commit. `GIT_COMMITTER_DATE` lets anyone stamp a commit with any date, so a
+tool that measured age with `git log` would accept a malicious commit backdated
+by eight days as already aged.
 
 aur-cooldown therefore never reads dates from git. Age comes from the AUR RPC
 `LastModified` field, which the server sets when a push is accepted and the
@@ -183,6 +186,19 @@ Known limits, stated plainly:
   not replace one; for checking whether a machine was already affected by a
   known campaign, use
   [aur-malware-check](https://github.com/lenucksi/aur-malware-check).
+
+## References
+
+The AUR supply-chain incidents this tool is a response to:
+
+- July 2025, Chaos RAT in three browser packages:
+  [The Register](https://www.theregister.com/2025/07/22/arch_aur_browsers_compromised/),
+  [BleepingComputer](https://www.bleepingcomputer.com/news/security/arch-linux-pulls-aur-packages-that-installed-chaos-rat-malware/).
+- June 2026, 400+ packages ("Atomic Arch") pushing an infostealer and an eBPF
+  rootkit via spoofed and adopted maintainer accounts:
+  [BleepingComputer](https://www.bleepingcomputer.com/news/security/over-400-arch-linux-packages-compromised-to-push-rootkit-infostealer/),
+  [The Hacker News](https://thehackernews.com/2026/06/over-400-arch-linux-aur-packages.html),
+  [Phoronix](https://www.phoronix.com/news/Arch-Linux-AUR-400-Compromised).
 
 ## License
 
