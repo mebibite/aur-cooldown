@@ -1,0 +1,10 @@
+# aur-cooldown configuration — copy to ~/.config/aur-cooldown/config
+# Format: key = value. Blank lines and #-comments are ignored.
+
+# Command used to gain root when installing a built package.
+# Defaults to sudo, falling back to su when sudo is not installed.
+# Set this if you escalate with su or doas instead.
+#sudo = su
+
+# Extra flags passed to that command (optional).
+#sudoflags = -l

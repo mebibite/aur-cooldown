@@ -1,0 +1,85 @@
+name: Publish to AUR
+
+# Publishes a release to the AUR. Triggered manually only: a git-tag push can be
+# fired by a leaked SSH key or token (git credentials bypass 2FA), whereas a
+# manual dispatch requires a session established with GitHub's own account
+# security. There is deliberately no automatic path to publishing.
+#
+# Security note: pushing to the AUR requires an SSH private key, and the AUR has
+# no 2FA, so that key is the only credential guarding this package. Minimise the
+# blast radius:
+#   - Use a dedicated AUR SSH key for CI (AUR accounts allow several keys), so it
+#     can be revoked without touching your personal key.
+#   - The job runs in the "aur" environment; add required reviewers to it in the
+#     repo settings so the secret is only released after an explicit approval.
+#     That approval is a second deliberate, session-gated step on top of the
+#     manual dispatch (and gives real separation of duties once there is more
+#     than one maintainer).
+#
+# Setup:
+#   1. ssh-keygen -t ed25519 -f aur_ci -C "aur-ci@aur-cooldown"   (no passphrase)
+#   2. Add aur_ci.pub to your AUR account (My Account -> SSH Public Key).
+#   3. Add the private key (aur_ci) as the repo secret AUR_SSH_PRIVATE_KEY.
+#
+# Release: tag the commit (git tag v0.7.0 && git push origin v0.7.0), then run
+# this workflow from the Actions tab with that tag as the input.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag to publish (e.g. v0.6.0)'
+        required: true
+
+concurrency: aur-publish
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: aur          # add required reviewers here for an approval gate
+    container: archlinux:base-devel
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed git openssh pacman-contrib
+
+      - name: Resolve tag
+        run: echo "TAG=${{ github.event.inputs.tag }}" >> "$GITHUB_ENV"
+
+      - name: Checkout the tag
+        uses: actions/checkout@v4    # pin to a commit SHA for extra safety
+        with:
+          ref: ${{ env.TAG }}
+
+      # makepkg / updpkgsums refuse to run as root, so use an unprivileged user.
+      - name: Build the package metadata
+        run: |
+          useradd -m builder
+          chown -R builder "$GITHUB_WORKSPACE"
+          ver="${TAG#v}"
+          sed -i "s/^pkgver=.*/pkgver=$ver/" PKGBUILD
+          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+          runuser -u builder -- updpkgsums                 # real checksum from the release tarball
+          runuser -u builder -- makepkg --printsrcinfo > .SRCINFO
+
+      - name: Push to the AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          cat > ~/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/aur
+            StrictHostKeyChecking accept-new
+          EOF
+          git config --global user.name  "Adrin Jalali"
+          git config --global user.email "adrin.jalali@gmail.com"
+          git config --global --add safe.directory '*'
+          git clone ssh://aur@aur.archlinux.org/aur-cooldown.git aur
+          cp PKGBUILD .SRCINFO aur-cooldown.install aur/
+          cd aur
+          git add PKGBUILD .SRCINFO aur-cooldown.install
+          git commit -m "Update to $TAG" || { echo "nothing to publish"; exit 0; }
+          git push

@@ -200,6 +200,12 @@ The AUR supply-chain incidents this tool is a response to:
   [The Hacker News](https://thehackernews.com/2026/06/over-400-arch-linux-aur-packages.html),
   [Phoronix](https://www.phoronix.com/news/Arch-Linux-AUR-400-Compromised).
 
+## Contributing
+
+Bug reports, fixes, and security findings are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md). Please report security issues privately
+rather than in a public issue.
+
 ## License
 
 MIT.
