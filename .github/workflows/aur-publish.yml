@@ -61,6 +61,13 @@ jobs:
           runuser -u builder -- updpkgsums                 # real checksum from the release tarball
           runuser -u builder -- makepkg --printsrcinfo > .SRCINFO
 
+      # Actually build the package (package() runs "make install" into a
+      # fakeroot pkgdir), so a broken PKGBUILD or a missing packaged file fails
+      # the release here instead of shipping to users. Does not install to the
+      # runner; -i is omitted.
+      - name: Verify the package builds
+        run: runuser -u builder -- makepkg -f --noconfirm
+
       - name: Push to the AUR
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
