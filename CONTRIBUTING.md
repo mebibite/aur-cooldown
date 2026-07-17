@@ -9,18 +9,8 @@ are cut.
 ## Reporting a security issue
 
 Please do **not** open a public issue for a vulnerability, especially one that
-could let a malicious version bypass the cooldown or the denylist.
-
-Use GitHub's private vulnerability reporting (the repository's
-**Security** tab → *Report a vulnerability*). A useful report says
-what the tool does, what it should have done, and — if you have one —
-a concrete sequence (ledger state, commits, timestamps) that
-demonstrates the gap. You'll get a response as soon as reasonably
-possible.
-
-The threat model and the guarantees the tool tries to keep are written out in
-the README's "Security model" section; findings that break one of those are
-exactly what's most valuable.
+could let a malicious version bypass the cooldown or the denylist. Report it
+privately instead — see [SECURITY.md](SECURITY.md).
 
 ## Reporting bugs and requesting features
 
