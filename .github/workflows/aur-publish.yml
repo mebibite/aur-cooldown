@@ -84,9 +84,10 @@ jobs:
           git config --global user.name  "Adrin Jalali"
           git config --global user.email "adrin.jalali@gmail.com"
           git config --global --add safe.directory '*'
+          git config --global init.defaultBranch master   # the AUR only accepts master
           git clone ssh://aur@aur.archlinux.org/aur-cooldown.git aur
           cp PKGBUILD .SRCINFO aur-cooldown.install aur/
           cd aur
           git add PKGBUILD .SRCINFO aur-cooldown.install
           git commit -m "Update to $TAG" || { echo "nothing to publish"; exit 0; }
-          git push
+          git push origin HEAD:master
