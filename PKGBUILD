@@ -1,6 +1,6 @@
 # Maintainer: Adrin Jalali <adrin.jalali@gmail.com>
 pkgname=aur-cooldown
-pkgver=0.6.0
+pkgver=0.6.1
 pkgrel=1
 pkgdesc="Delay AUR upgrades until they have aged, so malicious pushes are caught before they land"
 arch=('any')

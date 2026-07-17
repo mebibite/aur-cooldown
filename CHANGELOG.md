@@ -1,8 +1,9 @@
 # Changelog
 
-## 0.6.0 — unreleased
+## 0.6.1 — 2026-07-17
 
-First public release.
+First public release. (0.6.0 was tagged but never published; its release
+tarball was missing a packaged file.)
 
 - `observe`, `upgrade`, `status`, `refresh` subcommands; single-file Python,
   standard library only.
