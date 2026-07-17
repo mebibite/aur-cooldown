@@ -75,12 +75,12 @@ jobs:
           install -d -m 700 ~/.ssh
           printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
           chmod 600 ~/.ssh/aur
-          cat > ~/.ssh/config <<'EOF'
-          Host aur.archlinux.org
-            User aur
-            IdentityFile ~/.ssh/aur
-            StrictHostKeyChecking accept-new
-          EOF
+          # Record the AUR host keys so verification is deterministic (the
+          # runner has never contacted the host). ssh-keyscan is trust-on-first-
+          # -use; pin the fingerprints below for stricter verification.
+          ssh-keyscan -t ed25519,rsa,ecdsa aur.archlinux.org > ~/.ssh/known_hosts 2>/dev/null
+          # Drive git's SSH explicitly instead of relying on ~/.ssh/config.
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
           git config --global user.name  "Adrin Jalali"
           git config --global user.email "adrin.jalali@gmail.com"
           git config --global --add safe.directory '*'
