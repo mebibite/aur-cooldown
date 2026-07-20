@@ -38,6 +38,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -918,7 +919,7 @@ def main():
     p.add_argument("pkgs", nargs="*")
     p.set_defaults(fn=cmd_status)
 
-    p = sub.add_parser("refresh", help="re-fetch the denylist feeds")
+    p = sub.add_parser("refresh", help="re-fetch the campaign denylist")
     p.set_defaults(fn=cmd_refresh)
 
     p = sub.add_parser("setup", help="wire the yay hook and shell reminder into your config")
@@ -928,8 +929,13 @@ def main():
     p.set_defaults(fn=cmd_setup)
 
     args = parser.parse_args()
+    # Exit cleanly on Ctrl-C (SIGINT) and SIGTERM instead of dumping a traceback.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     try:
         args.fn(args)
+    except KeyboardInterrupt:
+        print("\naborted.", file=sys.stderr)
+        sys.exit(130)
     except (urllib.error.URLError, json.JSONDecodeError) as e:
         print(f"aur-cooldown: network error: {e}", file=sys.stderr)
         sys.exit(1)
