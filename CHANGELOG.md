@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 — 2026-07-20
 
 - Reworked the denylist around aur-malware-check's `campaigns.json`. Denial is
   now **version-scoped by date window**: a version is refused only if its AUR
