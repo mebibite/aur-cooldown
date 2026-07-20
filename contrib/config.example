@@ -8,3 +8,12 @@
 
 # Extra flags passed to that command (optional).
 #sudoflags = -l
+
+# Campaign denylist. On by default: aur-cooldown fetches aur-malware-check's
+# campaigns.json and refuses versions pushed inside a known campaign's date
+# window. Set to off to disable it entirely (no network fetch for it).
+#denylist = off
+
+# Override the campaigns.json source (must follow the same schema and repo
+# layout as aur-malware-check).
+#denylist_source = https://raw.githubusercontent.com/lenucksi/aur-malware-check/master/data/campaigns.json

@@ -1,19 +1,20 @@
-# Remote denylist feeds for aur-cooldown. Off by default; to enable, copy this
-# file to ~/.config/aur-cooldown/denylist-feeds and uncomment/add URLs.
+# Extra advisory lists for aur-cooldown (optional).
 #
-# Each URL must return plain text: one AUR package name per line, '#' comments
-# allowed. Tracked packages appearing on any feed are frozen (never upgraded)
-# until they drop off the feed. Feeds are fetched by `observe` and `refresh`;
-# on fetch failure the previous cache is kept.
+# aur-cooldown already consumes a campaign denylist by default: the
+# community-maintained aur-malware-check campaigns.json, which carries a date
+# window per campaign. Versions pushed inside a campaign's window are refused;
+# clean versions outside it are not. You do NOT need to configure that here, and
+# you can turn it off or repoint it with the `denylist` / `denylist_source` keys
+# in the config file (see config.example).
 #
-# Consuming a third-party list is safe here because a denylist can only
-# withhold installs, never cause one. A wrong or stale feed makes you wait,
-# nothing more.
+# This file is only for ADDITIONAL lists you trust. Copy it to
+# ~/.config/aur-cooldown/denylist-feeds and add one URL per line. Each URL must
+# return plain text, one AUR package name per line, '#' comments allowed.
 #
-# Community-maintained campaign list (aur-general mailing list + official
-# incident notes, consolidated):
+# These extra lists have no date window, so aur-cooldown treats them as an
+# ADVISORY: if an installed package is listed, it is reported (with a suggestion
+# to hard-block via IgnorePkg) but not auto-frozen, because a bare name can't be
+# scoped to a specific bad version. Lists are fetched by `observe` and
+# `refresh`; on fetch failure the previous cache is kept.
 #
-#https://raw.githubusercontent.com/lenucksi/aur-malware-check/main/data/campaigns/aur-infected/packages.txt
-#
-# During an active incident, the official Arch pad for that campaign (announced
-# on archlinux.org/news and aur-general) can be added directly.
+#https://example.org/my-trusted-aur-blocklist.txt

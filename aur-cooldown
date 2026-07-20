@@ -31,6 +31,7 @@ Environment: AUR_COOLDOWN_DAYS overrides the cooldown length.
 """
 
 import argparse
+import calendar
 import glob
 import json
 import os
@@ -58,7 +59,7 @@ CONFDIR = os.path.join(XDG_CONFIG, "aur-cooldown")
 SRCDEST = os.path.join(CACHE, "sources")
 LEDGER = os.path.join(STATE, "ledger.jsonl")
 LASTOBS = os.path.join(STATE, "last-observe")
-FEED_CACHE = os.path.join(STATE, "denylist-feed.cache")
+DENY_CACHE = os.path.join(STATE, "denylist.cache.json")
 PKGCONF = os.path.join(CONFDIR, "packages")
 DENY = os.path.join(CONFDIR, "revoked")
 FEEDSCONF = os.path.join(CONFDIR, "denylist-feeds")
@@ -66,6 +67,8 @@ CONFIGFILE = os.path.join(CONFDIR, "config")
 
 RPC = "https://aur.archlinux.org/rpc/v5/info"
 GITBASE = "https://aur.archlinux.org"
+DENY_SOURCE = ("https://raw.githubusercontent.com/lenucksi/aur-malware-check"
+               "/master/data/campaigns.json")
 UA = f"aur-cooldown/{VERSION}"
 DAYS = int(os.environ.get("AUR_COOLDOWN_DAYS", "7"))
 RPC_BATCH = 150
@@ -309,49 +312,127 @@ def denied_version(pkg, version, commit, deny):
     return False
 
 
-def load_feed_names():
-    names = set()
-    if os.path.exists(FEED_CACHE):
-        for line in open(FEED_CACHE):
-            t = line.strip()
-            if t and not t.startswith("#"):
-                names.add(t)
-    return names
+# The denylist consumes aur-malware-check's campaigns.json, which lists, per
+# campaign, the affected package names plus a date window. We deny only versions
+# whose AUR push timestamp falls inside a campaign's window, so a package that
+# has since shipped a clean version is not held. Windowless campaigns carry no
+# version scope and their entries are legitimate hijacked-then-cleaned packages,
+# so those are surfaced to the user as an advisory rather than auto-frozen.
+
+def _http_get(url):
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read().decode("utf-8", "replace")
 
 
-def refresh_feeds():
-    """Fetch the configured package-name denylist feeds into the local cache.
+def _names(text):
+    out = []
+    for line in text.splitlines():
+        t = line.strip()
+        if t and not t.startswith("#"):
+            out.append(t.split()[0])
+    return out
 
-    Best-effort by design: if any feed is unreachable, the previous cache is
-    kept unchanged. A denylist can only withhold installs, so a stale cache
-    errs on the conservative side. Returns the effective frozen-name set.
-    """
-    if not os.path.exists(FEEDSCONF):
-        return load_feed_names()
-    urls = [ln.strip() for ln in open(FEEDSCONF)
-            if ln.strip() and not ln.strip().startswith("#")]
-    if not urls:
-        return load_feed_names()
-    names = set()
-    for url in urls:
+
+def _window_bounds(window):
+    """A {"start","end"} date window to an inclusive UTC-epoch (start, end) pair."""
+    start = calendar.timegm(time.strptime(window["start"], "%Y-%m-%d"))
+    end = calendar.timegm(time.strptime(window["end"], "%Y-%m-%d")) + 86400 - 1
+    return start, end
+
+
+def load_denylist():
+    """The cached denylist: {"windows": {pkg: [[start,end],...]}, "advisory": {pkg: [campaign,...]}}."""
+    if os.path.exists(DENY_CACHE):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                text = resp.read().decode("utf-8", "replace")
-        except (urllib.error.URLError, OSError) as e:
-            print(f"aur-cooldown: feed unreachable, keeping cache ({url}): {e}",
-                  file=sys.stderr)
-            return load_feed_names()
-        for line in text.splitlines():
-            t = line.strip()
-            if t and not t.startswith("#"):
-                names.add(t.split()[0])
+            d = json.load(open(DENY_CACHE))
+            return {"windows": d.get("windows", {}), "advisory": d.get("advisory", {})}
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"windows": {}, "advisory": {}}
+
+
+def refresh_denylist(conf):
+    """Fetch the campaign denylist into a structured local cache.
+
+    Reads aur-malware-check's campaigns.json (or a configured source) plus any
+    extra plain name-lists from the denylist-feeds file. Fail-closed: on any
+    fetch or parse error the previous cache is kept unchanged, so a bad network
+    day never makes something newly installable. Returns the effective denylist.
+    """
+    if conf.get("denylist", "on").lower() in ("off", "false", "no", "0"):
+        return {"windows": {}, "advisory": {}}
+    source = conf.get("denylist_source", DENY_SOURCE)
+    windows, advisory = {}, {}
+
+    def add_advisory(pkg, tag):
+        advisory.setdefault(pkg, [])
+        if tag not in advisory[pkg]:
+            advisory[pkg].append(tag)
+
+    try:
+        data = json.loads(_http_get(source))
+        marker = "data/campaigns.json"
+        root = source.split(marker)[0] if marker in source else source.rsplit("/", 1)[0] + "/"
+        for c in data.get("campaigns", []):
+            if c.get("type") != "aur":
+                continue
+            display = c.get("display") or c.get("id") or "campaign"
+            names = []
+            for path in c.get("lists", []):
+                names += _names(_http_get(root + path))
+            window = c.get("date_window")
+            if window and window.get("start") and window.get("end"):
+                bounds = list(_window_bounds(window))
+                for n in names:
+                    windows.setdefault(n, []).append(bounds)
+            else:
+                for n in names:
+                    add_advisory(n, display)
+        # Extra user feeds (plain name lists) have no window, so advisory-only.
+        if os.path.exists(FEEDSCONF):
+            for url in _names(open(FEEDSCONF).read()):
+                for n in _names(_http_get(url)):
+                    add_advisory(n, url)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"aur-cooldown: denylist unreachable, keeping cache: {e}",
+              file=sys.stderr)
+        return load_denylist()
+
     ensure_dirs()
-    with open(FEED_CACHE, "w") as fh:
-        fh.write(f"# fetched {day(now())} from: {' '.join(urls)}\n")
-        for n in sorted(names):
-            fh.write(n + "\n")
-    return names
+    with open(DENY_CACHE, "w") as fh:
+        json.dump({"fetched": now(), "windows": windows, "advisory": advisory}, fh)
+    return {"windows": windows, "advisory": advisory}
+
+
+def window_denied(pkg, last_modified, dl):
+    """True if the version's push time falls inside a campaign window for pkg."""
+    for start, end in dl.get("windows", {}).get(pkg, []):
+        if start <= last_modified <= end:
+            return True
+    return False
+
+
+def advisory_hits(dl):
+    """Installed AUR packages named on a windowless (advisory) campaign list."""
+    adv = dl.get("advisory", {})
+    if not adv:
+        return []
+    installed = set(installed_aur())
+    return sorted((p, adv[p]) for p in adv if p in installed)
+
+
+def print_advisory(dl):
+    hits = advisory_hits(dl)
+    if not hits:
+        return
+    print("\nADVISORY: installed packages named in a campaign with no version window:")
+    for pkg, campaigns in hits:
+        print(f"  {pkg:28} {', '.join(campaigns)}")
+    print("aur-cooldown can't scope these to specific versions, so it does not\n"
+          "freeze them. Review them; to hard-block one, add it to IgnorePkg in\n"
+          "/etc/pacman.conf (yay honors it). To check whether a machine was\n"
+          "actually affected, run https://github.com/lenucksi/aur-malware-check")
 
 
 # --- git ---------------------------------------------------------------------
@@ -438,19 +519,12 @@ def cmd_observe(args):
     print(f"\n{added} new version(s) recorded, {unchanged} unchanged, "
           f"{len(missing)} not in the AUR.")
 
-    frozen = sorted(set(names) & refresh_feeds())
-    if frozen:
-        print("\nWARNING: installed packages found on a denylist feed:")
-        for p in frozen:
-            print(f"  {p}")
-        print("These are frozen; aur-cooldown will not upgrade them. Note that\n"
-              "feeds are name-level: being listed means the package was part of\n"
-              "a campaign, not necessarily that your installed build is affected.")
+    print_advisory(refresh_denylist(read_config()))
 
 
 # --- upgrade -----------------------------------------------------------------
 
-def resolve(pkg, cutoff, rows, deny, feed, is_auto):
+def resolve(pkg, cutoff, rows, deny, dl, is_auto):
     """Decide what to do for one package.
 
     Returns (action, detail) where action is one of build, up-to-date, none,
@@ -459,8 +533,6 @@ def resolve(pkg, cutoff, rows, deny, feed, is_auto):
     installed = installed_version(pkg)
     if installed is None and is_auto:
         return "not-installed", None
-    if pkg in feed:
-        return "denied", None
 
     aged = aged_versions(pkg, cutoff, rows)
     if not aged:
@@ -469,7 +541,7 @@ def resolve(pkg, cutoff, rows, deny, feed, is_auto):
     base = base_for(pkg, rows) or pkg
     repo = ancestry = None
     srcinfo_cache = {}
-    saw_yank = False
+    saw_yank = saw_denied = False
 
     for entry in aged:
         v, recorded = entry["version"], entry["commit"]
@@ -477,6 +549,11 @@ def resolve(pkg, cutoff, rows, deny, feed, is_auto):
             return "up-to-date", {"version": installed}
         if denied_version(pkg, v, recorded, deny):
             saw_yank = True
+            continue
+        # Deny only versions pushed inside a known campaign window; a clean
+        # version pushed outside it still builds.
+        if window_denied(pkg, entry["last_modified"], dl):
+            saw_denied = True
             continue
         if repo is None:
             try:
@@ -503,14 +580,18 @@ def resolve(pkg, cutoff, rows, deny, feed, is_auto):
                          "installed": installed,
                          "last_modified": entry["last_modified"]}
 
-    return ("yanked" if saw_yank else "none"), None
+    if saw_denied:
+        return "denied", None
+    if saw_yank:
+        return "yanked", None
+    return "none", cooling_info(pkg, installed, rows)
 
 
 def cmd_upgrade(args):
     ensure_dirs()
     rows = load_ledger()
     deny = local_denylist()
-    feed = load_feed_names()
+    dl = load_denylist()
     sudo, flags = resolve_sudo(args)
     cutoff = now() - DAYS * 86400
     names, is_auto = targets(args.pkgs)
@@ -519,14 +600,14 @@ def cmd_upgrade(args):
     plan, cooling, unobserved = [], [], []
     up_to_date = 0
     for pkg in names:
-        action, d = resolve(pkg, cutoff, rows, deny, feed, is_auto)
+        action, d = resolve(pkg, cutoff, rows, deny, dl, is_auto)
         if action == "build":
             change = (f"{d['installed']} -> {d['version']}" if d["installed"]
                       else f"install {d['version']}")
             print(f"  {pkg:30} {change} (pushed {day(d['last_modified'])})")
             plan.append((pkg, d))
         elif action == "denied":
-            print(f"  {pkg:30} frozen by denylist, skipped")
+            print(f"  {pkg:30} version pushed during a campaign window, skipped")
         elif action == "yanked":
             print(f"  {pkg:30} aged version no longer in canonical history, waiting")
         elif action == "error":
@@ -553,6 +634,7 @@ def cmd_upgrade(args):
     if unobserved:
         tail += f", {len(unobserved)} not yet observed"
     print(f"\n{tail}.")
+    print_advisory(dl)
 
     if not plan:
         return
@@ -631,7 +713,7 @@ def cmd_upgrade(args):
 
 def cmd_status(args):
     rows = load_ledger()
-    feed = load_feed_names()
+    dl = load_denylist()
     last = int(open(LASTOBS).read()) if os.path.exists(LASTOBS) else 0
     if last:
         print(f"last observe: {time.strftime('%Y-%m-%d %H:%M', time.localtime(last))} "
@@ -641,7 +723,7 @@ def cmd_status(args):
     cutoff = now() - DAYS * 86400
     tracked = {r["pkg"] for r in rows}
     print(f"cooldown: {DAYS} days   tracked: {len(tracked)}   "
-          f"frozen by feed: {len(feed)}\n")
+          f"campaign windows: {len(dl['windows'])}\n")
 
     by = {}
     for r in rows:
@@ -649,24 +731,21 @@ def cmd_status(args):
     for pkg in sorted(by):
         entries = sorted(by[pkg], key=lambda r: r["last_modified"])
         tip = entries[-1]
-        if pkg in feed:
-            ready = "frozen (denylist feed)"
-        else:
-            aged = [e for e in entries
-                    if e["last_modified"] <= cutoff and e.get("commit")]
-            ready = (f"{aged[-1]['version']} (pushed {day(aged[-1]['last_modified'])})"
-                     if aged else "none yet")
+        aged = [e for e in entries if e["last_modified"] <= cutoff and e.get("commit")
+                and not window_denied(pkg, e["last_modified"], dl)]
+        ready = (f"{aged[-1]['version']} (pushed {day(aged[-1]['last_modified'])})"
+                 if aged else "none yet")
         print(f"  {pkg:28} eligible: {ready:42} tip: {tip['version']} "
               f"(pushed {day(tip['last_modified'])})")
+    print_advisory(dl)
 
 
 def cmd_refresh(args):
     ensure_dirs()
-    if not os.path.exists(FEEDSCONF):
-        print(f"no denylist feeds configured ({FEEDSCONF})")
-        return
-    names = refresh_feeds()
-    print(f"{len(names)} package name(s) frozen, cached at {FEED_CACHE}")
+    dl = refresh_denylist(read_config())
+    print(f"denylist refreshed: {len(dl['windows'])} package(s) with a campaign "
+          f"window, {len(dl['advisory'])} advisory-only, cached at {DENY_CACHE}")
+    print_advisory(dl)
 
 
 # --- setup -------------------------------------------------------------------

@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Reworked the denylist around aur-malware-check's `campaigns.json`. Denial is
+  now **version-scoped by date window**: a version is refused only if its AUR
+  push timestamp falls inside a campaign's compromise window, so a package that
+  has shipped a clean version since is no longer pinned by name forever (the old
+  name-level feed froze listed packages indefinitely). On by default; disable
+  with `denylist = off` or repoint with `denylist_source`.
+- Campaigns with no date window are no longer frozen. Their entries are
+  legitimate hijacked-then-cleaned packages; `observe`/`status`/`upgrade` print
+  an advisory naming any installed one and suggest an `IgnorePkg` hard-block,
+  rather than silently pinning it.
+- `refresh` now reports windowed vs advisory package counts. The cache moved to
+  `~/.local/share/aur-cooldown/denylist.cache.json`.
+
 ## 0.6.1 — 2026-07-17
 
 First public release. (0.6.0 was tagged but never published; its release

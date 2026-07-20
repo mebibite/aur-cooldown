@@ -88,7 +88,7 @@ only for packages that actually have a pending aged upgrade.
 
     $ aur-cooldown status
     last observe: 2026-07-05 16:57 (1d ago)
-    cooldown: 7 days   tracked: 48   frozen by feed: 0
+    cooldown: 7 days   tracked: 48   campaign windows: 1943
 
       claude-code        eligible: 2.1.191-1 (pushed 2026-06-24)   tip: 2.1.201-1 (pushed 2026-07-04)
       cursor-bin         eligible: 3.9.8-1 (pushed 2026-06-25)     tip: 3.9.16-1 (pushed 2026-06-28)
@@ -102,8 +102,8 @@ Everything lives in `~/.config/aur-cooldown/`; all files are optional.
 |---|---|
 | `packages` | explicit package list, one per line; when absent or empty, every installed AUR package is tracked (`pacman -Qm`, excluding `-debug` split companions) |
 | `revoked` | local denylist, `<pkg> <version-or-commit-prefix>` per line |
-| `denylist-feeds` | remote denylist feed URLs, one per line; off by default |
-| `config` | `key = value` settings; currently `sudo` and `sudoflags` |
+| `denylist-feeds` | extra advisory name-list URLs, one per line (the campaign denylist is built in; see below) |
+| `config` | `key = value` settings: `sudo`, `sudoflags`, `denylist`, `denylist_source` |
 
 ### Gaining root for the install
 
@@ -124,23 +124,38 @@ cached (in `sources/`) and reused across rebuilds like yay does, so a retry
 after a failed build does not download them again; delete that directory to
 reclaim the space. `AUR_COOLDOWN_DAYS` overrides the cooldown length.
 
-## Denylist feeds
+## Denylist
 
-A feed is a URL returning AUR package names, one per line. Any tracked package
-that appears on a feed is frozen: `upgrade` refuses to touch it until it drops
-off the feed. Feeds are fetched during `observe` (and by `refresh`); if a fetch
-fails, the previous cache is kept.
+The cooldown alone protects you only while a bad version is caught within the
+cooldown window. It is the primary defence, and for both known AUR incidents it
+was enough: the malicious versions were removed within about two days, well
+inside a week. The denylist is the backstop for a slower future incident, one
+where a bad version ages in before anyone notices.
 
-Feeds are safe to consume from third parties because a denylist is fail-safe:
-it can only withhold an install, never cause one. The worst a wrong or stale
-feed does is make you wait.
+By default aur-cooldown consumes the community-maintained
+[aur-malware-check](https://github.com/lenucksi/aur-malware-check)
+`campaigns.json`, which records, per campaign, the affected package names **and
+a date window**. Crucially, the window lets the denial be *version-scoped*: a
+version is refused only if its AUR push timestamp falls inside the window, so a
+package that has since shipped a clean version is not held. Nothing is pinned
+by name forever. The list is fetched during `observe` (and by `refresh`); if a
+fetch fails, the previous cache is kept, so a bad network day never makes
+anything newly installable.
 
-A good feed is the community-maintained campaign list from
-[aur-malware-check](https://github.com/lenucksi/aur-malware-check), which
-consolidates the aur-general mailing list and the official incident notes. Be
-aware that it is name-level: a listed package was part of a campaign, which
-does not necessarily mean your installed build is affected. See
-`denylist-feeds.example` in the share directory.
+Some campaigns have no date window (e.g. a spam campaign whose exact dates were
+never pinned down). Their entries are ordinary packages that were hijacked and
+then cleaned, so aur-cooldown does **not** freeze them; anything cleaned by a
+reset is already handled by the history check above. Instead it prints an
+**advisory** naming any installed package on such a list, and suggests hard-
+blocking it via `IgnorePkg` in `/etc/pacman.conf` (yay honours it) if you want.
+To check whether a machine was actually affected by a campaign, use
+[aur-malware-check](https://github.com/lenucksi/aur-malware-check)'s scanner.
+
+Turn the campaign denylist off with `denylist = off` in the config, or point it
+at a different source with `denylist_source`. You can add your own trusted
+name-lists in `denylist-feeds`; those have no window and are treated as
+advisories. Consuming any such list is safe because a denylist is fail-safe: it
+can only withhold an install, never cause one.
 
 ## Security model
 
@@ -168,7 +183,8 @@ the version. The practical consequences:
 | Malicious push reusing an already-aged version string | the oldest commit with that version is built, which is the original clean one |
 | Bad version removed by AUR staff (delete or reset, the usual cleanup) | recorded commit gone from history; skipped, tool waits |
 | Version we never observed | never installed |
-| Feed or network failure | previous state kept; nothing new becomes installable |
+| Version pushed inside a known campaign window | denied; a clean version outside the window still builds |
+| Denylist or network failure | previous cache kept; nothing new becomes installable |
 
 Everything unverifiable fails closed: the tool waits rather than installs.
 
@@ -176,12 +192,14 @@ Known limits, stated plainly:
 
 - The guarantee is conditional on detection: a malicious version that stays
   unnoticed longer than the cooldown will age in and be installed. The cooldown
-  length is the knob; 7 days covered both known incidents comfortably.
+  length is the knob; 7 days covered both known incidents comfortably (their bad
+  versions were pulled within about two days). The denylist is the backstop for
+  a future incident whose detection lags past the cooldown.
 - If a compromise were cleaned up by committing a fix on top while leaving the
   malicious commit in history (not how AUR staff have handled incidents, which
   is deletion or reset), a fast-moving package could select the superseded bad
-  version during the window before the fix ages in. The denylist is the
-  backstop for this case.
+  version during the window before the fix ages in. The denylist covers this
+  too, when the bad window is known.
 - aur-cooldown does not inspect package contents. It is not a scanner and does
   not replace one; for checking whether a machine was already affected by a
   known campaign, use
