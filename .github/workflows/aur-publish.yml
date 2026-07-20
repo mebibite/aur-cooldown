@@ -37,10 +37,10 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     environment: aur          # add required reviewers here for an approval gate
-    container: archlinux:base-devel
+    container: archlinux:base-devel@sha256:212b1e518e94ee9c52be55e8a32da75fcf11e7b5610b80b49479e67880102406
     steps:
       - name: Install tools
-        run: pacman -Syu --noconfirm --needed git openssh pacman-contrib python make python-pytest
+        run: pacman -Syu --noconfirm --needed git openssh pacman-contrib python uv
 
       - name: Resolve tag
         run: echo "TAG=${{ github.event.inputs.tag }}" >> "$GITHUB_ENV"
@@ -59,7 +59,13 @@ jobs:
         run: |
           useradd -m builder
           chown -R builder "$GITHUB_WORKSPACE"
-          ver="${TAG#v}"
+          # The version lives only in the script; pkgver is derived from it and
+          # the tag must match, so a mistagged release fails here rather than
+          # shipping a mismatched version.
+          ver=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' aur-cooldown)
+          if [ "v$ver" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match the script VERSION ($ver)"; exit 1
+          fi
           sed -i "s/^pkgver=.*/pkgver=$ver/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
           runuser -u builder -- updpkgsums                 # real checksum from the release tarball

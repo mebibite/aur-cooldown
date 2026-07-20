@@ -1,6 +1,6 @@
 # Maintainer: Adrin Jalali <adrin.jalali@gmail.com>
 pkgname=aur-cooldown
-pkgver=0.6.1
+pkgver=0.6.1  # placeholder; the release workflow sets this from the script VERSION
 pkgrel=1
 pkgdesc="Delay AUR upgrades until they have aged, so malicious pushes are caught before they land"
 arch=('any')

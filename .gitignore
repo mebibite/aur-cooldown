@@ -2,3 +2,11 @@ __pycache__/
 *.pyc
 *.tar.gz
 .mcp.json
+.venv/
+.pytest_cache/
+# SSH keys must never land in the repo (the AUR deploy key belongs in ~/.ssh)
+aur_ci
+aur_ci.pub
+# editor / local tool dirs
+.idea/
+.claude/

@@ -1,0 +1,31 @@
+# aur-cooldown is a single executable script distributed via the AUR, not PyPI.
+# This file exists for tooling only: the version single-source, pytest config,
+# and the uv dev environment. It is never built or published as a package.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aur-cooldown"
+description = "Delay AUR upgrades until they have aged, so malicious pushes are caught before they land"
+readme = "README.md"
+requires-python = ">=3.8"
+dynamic = ["version"]
+
+# The one place the version is written: the VERSION line in the script itself
+# (it has to be embedded there, since the script ships standalone). Everything
+# else reads it from here.
+[tool.hatch.version]
+path = "aur-cooldown"
+pattern = 'VERSION = "(?P<version>[^"]+)"'
+
+[tool.uv]
+package = false            # virtual project: manage the env, never build it
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::ResourceWarning"]

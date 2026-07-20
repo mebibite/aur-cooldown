@@ -1,16 +1,21 @@
 name: CI
 
+# Runs on PRs (including the monthly image-bump PR) and on pushes to main. It
+# uses no secrets, so it is safe to run automatically on any pull request.
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    container: archlinux:base          # provides pacman/vercmp; tests use real git + vercmp
+    # Pinned for reproducibility. Bumped monthly by update-arch.yml, which only
+    # opens the bump PR once the suite passes against the newer image.
+    container: archlinux:base-devel@sha256:212b1e518e94ee9c52be55e8a32da75fcf11e7b5610b80b49479e67880102406
     steps:
       - name: Install tools
-        run: pacman -Syu --noconfirm --needed python git make python-pytest
+        run: pacman -Syu --noconfirm --needed python git uv    # make/pacman(vercmp) are in base-devel
 
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0

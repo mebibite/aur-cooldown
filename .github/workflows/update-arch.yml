@@ -1,0 +1,91 @@
+name: Update Arch base image
+
+# CI and the release workflow pin archlinux:base-devel by digest. Arch is
+# rolling, so once a month this job checks for a newer digest and, if there is
+# one, runs the suite against it and opens a PR bumping the pin either way, with
+# the test result in the PR body.
+#
+# It uses only the ephemeral GITHUB_TOKEN: minted per run, scoped by the
+# permissions below, and gone when the run ends. There is no stored token that
+# could push to the repo if leaked. The cost of that is that GITHUB_TOKEN pushes
+# do not trigger ci.yml on the PR, so this run's own test result is the signal;
+# once you push a fix commit to the PR branch, ci.yml runs as usual. (To have CI
+# auto-run on the PR instead, you would run this from a bot-owned fork; see
+# CONTRIBUTING. That buys convenience for the cost of a second account.)
+
+on:
+  schedule:
+    - cron: "0 6 1 * *"      # 06:00 UTC on the 1st of each month
+  workflow_dispatch:
+
+permissions:
+  contents: write            # ephemeral GITHUB_TOKEN: push the bump branch
+  pull-requests: write       # ... and open the PR
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Resolve latest vs pinned digest
+        id: d
+        run: |
+          repo=library/archlinux; tag=base-devel
+          token=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${repo}:pull" \
+            | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+          latest=$(curl -sI -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.oci.image.index.v1+json" \
+            -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+            "https://registry-1.docker.io/v2/${repo}/manifests/${tag}" \
+            | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest"{print $2}')
+          current=$(grep -ohE 'base-devel@sha256:[a-f0-9]+' .github/workflows/ci.yml | head -1 | cut -d@ -f2)
+          echo "latest=$latest"   >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "pinned: $current   latest: $latest"
+
+      - name: Run the suite against the new image
+        id: test
+        if: steps.d.outputs.latest != steps.d.outputs.current && steps.d.outputs.latest != ''
+        continue-on-error: true         # a failure still opens a PR, then fails the run at the end
+        run: |
+          docker run --rm -v "$PWD":/w -w /w \
+            "archlinux:base-devel@${{ steps.d.outputs.latest }}" bash -c '
+              pacman -Syu --noconfirm --needed python git uv &&
+              make check && make test'
+
+      - name: Open the bump PR
+        if: steps.d.outputs.latest != steps.d.outputs.current && steps.d.outputs.latest != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          old="${{ steps.d.outputs.current }}"; new="${{ steps.d.outputs.latest }}"
+          sed -i "s#base-devel@${old}#base-devel@${new}#g" \
+            .github/workflows/ci.yml .github/workflows/aur-publish.yml
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="bot/arch-base-devel-$(date +%Y%m%d)"
+          git switch -C "$branch"
+          git commit -am "ci: bump pinned archlinux base-devel image"
+          git push -u origin "$branch" --force-with-lease
+          if [ "${{ steps.test.outcome }}" = "success" ]; then
+            verdict="The suite **passed** against the new image in this run, so this is safe to merge."
+          else
+            verdict="The suite **FAILED** against the new image (see the *Run the suite* step). Do not merge as-is; fix the failure first, pushing to this branch reruns CI normally."
+          fi
+          gh pr create --head "$branch" \
+            --title "ci: bump pinned archlinux base-devel image" \
+            --body "Monthly bump of the pinned \`archlinux:base-devel\` digest.
+
+          from: \`$old\`
+          to:   \`$new\`
+
+          $verdict" \
+            || echo "a PR for $branch already exists"
+
+      - name: Reflect a test failure in the run status
+        if: steps.test.outcome == 'failure'
+        run: |
+          echo "::error::the suite failed against the new image; a PR was opened for the fix"
+          exit 1

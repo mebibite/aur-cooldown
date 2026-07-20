@@ -31,4 +31,4 @@ check:
 	python -m py_compile aur-cooldown && echo OK
 
 test:
-	python -m pytest
+	uv run pytest
