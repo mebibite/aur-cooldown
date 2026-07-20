@@ -14,6 +14,9 @@
   rather than silently pinning it.
 - `refresh` now reports windowed vs advisory package counts. The cache moved to
   `~/.local/share/aur-cooldown/denylist.cache.json`.
+- Ctrl-C (SIGINT) and SIGTERM now exit cleanly instead of printing a traceback.
+- Added a unit test suite (`make test`) and a CI workflow; the release workflow
+  runs the tests before publishing.
 
 ## 0.6.1 — 2026-07-17
 

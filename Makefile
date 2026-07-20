@@ -5,7 +5,7 @@ SHAREDIR = $(DESTDIR)$(PREFIX)/share/aur-cooldown
 ZSHCOMP  = $(DESTDIR)$(PREFIX)/share/zsh/site-functions
 BASHCOMP = $(DESTDIR)$(PREFIX)/share/bash-completion/completions
 
-.PHONY: install uninstall check
+.PHONY: install uninstall check test
 
 install:
 	install -Dm755 aur-cooldown                    $(BINDIR)/aur-cooldown
@@ -29,3 +29,6 @@ uninstall:
 
 check:
 	python -m py_compile aur-cooldown && echo OK
+
+test:
+	python -W ignore::ResourceWarning -m unittest discover -s tests -v
