@@ -10,10 +10,7 @@ jobs:
     container: archlinux:base          # provides pacman/vercmp; tests use real git + vercmp
     steps:
       - name: Install tools
-        run: pacman -Syu --noconfirm --needed python git make
-
-      - name: Trust the workspace
-        run: git config --global --add safe.directory '*'
+        run: pacman -Syu --noconfirm --needed python git make python-pytest
 
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0

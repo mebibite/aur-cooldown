@@ -31,4 +31,4 @@ check:
 	python -m py_compile aur-cooldown && echo OK
 
 test:
-	python -W ignore::ResourceWarning -m unittest discover -s tests -v
+	python -m pytest

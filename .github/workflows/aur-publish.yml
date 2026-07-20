@@ -40,7 +40,7 @@ jobs:
     container: archlinux:base-devel
     steps:
       - name: Install tools
-        run: pacman -Syu --noconfirm --needed git openssh pacman-contrib python make
+        run: pacman -Syu --noconfirm --needed git openssh pacman-contrib python make python-pytest
 
       - name: Resolve tag
         run: echo "TAG=${{ github.event.inputs.tag }}" >> "$GITHUB_ENV"
@@ -52,7 +52,7 @@ jobs:
 
       # Never publish a tag whose tests do not pass.
       - name: Tests
-        run: git config --global --add safe.directory '*' && make check && make test
+        run: make check && make test
 
       # makepkg / updpkgsums refuse to run as root, so use an unprivileged user.
       - name: Build the package metadata

@@ -160,7 +160,7 @@ def install_deps(build, sudo, flags):
     if not atoms:
         return True
     unmet = run(["pacman", "-T", *atoms], check=False).stdout.split()
-    names = sorted({re.split(r"[<>=:]", a, 1)[0] for a in unmet})
+    names = sorted({re.split(r"[<>=:]", a, maxsplit=1)[0] for a in unmet})
     if not names:
         return True
     print(f"  installing dependencies: {' '.join(names)}")
