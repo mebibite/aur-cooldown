@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.1 — 2026-07-21
+
+- The post-install banner (run `aur-cooldown setup`) no longer reprints on every
+  upgrade — it is first-install guidance and `post_upgrade` is now silent.
+- `status` warns when the yay hook copied into `~/.config/yay/init.lua` has
+  drifted from the packaged one, the one case where an upgrade needs `setup`
+  re-run. The shell reminder sources `nudge.sh` by path, so it already refreshes
+  on its own.
+
 ## 0.7.0 — 2026-07-20
 
 - Reworked the denylist around aur-malware-check's `campaigns.json`. Denial is

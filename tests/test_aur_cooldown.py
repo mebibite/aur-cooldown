@@ -336,6 +336,34 @@ def test_write_block_idempotent_and_revert(tmp_path):
     assert "existing line" in read(path)
 
 
+def test_extract_block():
+    start, end = "-- >>>", "-- <<<"
+    assert m.extract_block("noise\n", start, end) is None       # no markers
+    text = f"pre\n{start}\n line one\n line two \n{end}\npost\n"
+    assert m.extract_block(text, start, end) == "line one\n line two"
+    assert m.extract_block(f"{start}\n{end}\n", start, end) == ""  # empty but present
+
+
+def test_hook_stale(tmp_path):
+    share = tmp_path / "share"
+    share.mkdir()
+    write(str(share / "yay-init.lua"), "HOOK BODY\n")
+    cfg = tmp_path / "config"
+    init = cfg / "yay" / "init.lua"
+    init.parent.mkdir(parents=True)
+    start, end = "-- >>> aur-cooldown >>>", "-- <<< aur-cooldown <<<"
+
+    with mock.patch.object(m, "share_dir", lambda: str(share)), \
+         mock.patch.object(m, "XDG_CONFIG", str(cfg)):
+        assert m.hook_stale() is False                          # no init.lua yet
+        write(str(init), f"{start}\nHOOK BODY\n{end}\n")
+        assert m.hook_stale() is False                          # copy matches package
+        write(str(init), f"{start}\nOLD BODY\n{end}\n")
+        assert m.hook_stale() is True                           # copy drifted -> nag
+        write(str(init), "yay.create_autocmd('UpgradeSelect', {})\n")
+        assert m.hook_stale() is False                          # merged by hand, no block
+
+
 def test_detect_yay_escalator(tmp_path):
     rc = str(tmp_path / "zshrc")
     write(rc, "alias ls='ls --color'\nalias yay='yay --sudo=su'\n")

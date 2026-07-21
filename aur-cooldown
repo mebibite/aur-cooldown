@@ -46,7 +46,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 
 HOME = os.path.expanduser("~")
 XDG_DATA = os.environ.get("XDG_DATA_HOME", os.path.join(HOME, ".local/share"))
@@ -739,6 +739,9 @@ def cmd_status(args):
         print(f"  {pkg:28} eligible: {ready:42} tip: {tip['version']} "
               f"(pushed {day(tip['last_modified'])})")
     print_advisory(dl)
+    if hook_stale():
+        print("\nthe packaged yay hook changed since you ran setup; re-run\n"
+              "'aur-cooldown setup' to refresh ~/.config/yay/init.lua")
 
 
 def cmd_refresh(args):
@@ -764,6 +767,25 @@ def share_dir():
         if os.path.isdir(cand):
             return cand
     return None
+
+
+def hook_stale():
+    """True when the yay hook copied into the user's init.lua no longer matches
+    the packaged one. That divergence is the only case where an upgrade leaves
+    the user needing to re-run 'setup' — the shell reminder sources nudge.sh by
+    path, so it refreshes on its own."""
+    share = share_dir()
+    if share is None:
+        return False
+    src = os.path.join(share, "yay-init.lua")
+    yay_init = os.path.join(XDG_CONFIG, "yay", "init.lua")
+    if not (os.path.exists(src) and os.path.exists(yay_init)):
+        return False
+    body = extract_block(open(yay_init).read(),
+                         "-- >>> aur-cooldown >>>", "-- <<< aur-cooldown <<<")
+    if body is None:              # hook merged by hand or absent; not ours to nag
+        return False
+    return body != open(src).read().strip()
 
 
 def shell_rc():
@@ -795,6 +817,21 @@ def detect_yay_escalator():
         flags = mflags.group(1).strip("\"'") if mflags else ""
         return mbin.group(1).strip("\"'"), flags
     return None
+
+
+def extract_block(text, start, end):
+    """Return the body between the start/end markers, or None if absent."""
+    out, inside, found = [], False, False
+    for line in text.splitlines():
+        if line.strip() == start:
+            inside, found = True, True
+            continue
+        if line.strip() == end:
+            inside = False
+            continue
+        if inside:
+            out.append(line)
+    return "\n".join(out).strip() if found else None
 
 
 def strip_block(text, start, end):
