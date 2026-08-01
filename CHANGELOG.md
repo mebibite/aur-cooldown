@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- The shell reminder now offers to run `observe` for you instead of only naming
+  the command to retype. It takes a single keypress, no Enter needed; `y` or
+  Enter accepts, and any other key declines, so a stray keystroke cannot set
+  work going. It still speaks up at most once a day, and stamps the day *before*
+  asking, so a declined or interrupted prompt does not come back in the next
+  shell.
+- The reminder never prompts when you have already started typing — those
+  keystrokes belong to the shell, not to us — and falls back to the plain
+  printed reminder instead. Same for a stdin that is not a terminal, an
+  `aur-cooldown` that is not on `PATH`, and `AUR_COOLDOWN_NUDGE_ASK=0`.
+- It never offers to `upgrade`: that wants root and can build for minutes, which
+  is not something to walk into from a shell prompt.
+- Added a test suite for the reminder, driven through a real pty under bash and
+  (when installed) zsh.
+
 ## 0.7.1 — 2026-07-21
 
 - The post-install banner (run `aur-cooldown setup`) no longer reprints on every

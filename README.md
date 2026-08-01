@@ -56,8 +56,11 @@ remove later with `aur-cooldown setup --revert`):
 
 1. the `yay` hook, into `~/.config/yay/init.lua`, so `yay -Syu` holds fresh AUR
    upgrades (skipped, with a note, if you already have an `UpgradeSelect` hook);
-2. a reminder to your shell rc (`~/.zshrc` or `~/.bashrc`) that tells you when
-   the ledger is stale;
+2. a reminder to your shell rc (`~/.zshrc` or `~/.bashrc`) that speaks up when
+   the ledger is stale and offers to run `observe` right there, so refreshing it
+   is a single keypress; it steps aside and just prints the reminder if you have
+   already started typing (`AUR_COOLDOWN_NUDGE_ASK=0` always does that,
+   `AUR_COOLDOWN_NUDGE_DAYS` sets the staleness threshold, default 3);
 3. if you run `yay` with `--sudo`, the matching `sudo` setting in
    `~/.config/aur-cooldown/config`, so installs escalate the same way.
 
