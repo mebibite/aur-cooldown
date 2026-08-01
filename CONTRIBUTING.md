@@ -57,6 +57,12 @@ those for real and stub out the network, AUR clones, and pacman queries. If you
 would rather not use uv, `pytest` (installed however you like) works too, since
 `make test` is just a thin wrapper.
 
+The test environment needs Python 3.10+, which is pytest's own floor and all
+that `requires-python` in `pyproject.toml` bounds — the shipped script still
+targets 3.8+. Keeping that field at 3.8 made uv resolve the dev group for
+Pythons nobody tests on and pin EOL pytest versions there. `zsh` is optional:
+the shell-reminder tests exercise it as well as bash when it is installed.
+
 Before opening a PR:
 
     make check                           # byte-compiles the script

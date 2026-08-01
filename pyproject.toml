@@ -10,7 +10,12 @@ build-backend = "hatchling.build"
 name = "aur-cooldown"
 description = "Delay AUR upgrades until they have aged, so malicious pushes are caught before they land"
 readme = "README.md"
-requires-python = ">=3.8"
+# Bounds the dev environment only, not the shipped script: nothing here is
+# built or installed, so this is just the range uv resolves the test tooling
+# for. Keeping it at the script's own 3.8 floor made uv fork the resolution
+# onto Pythons nobody tests on and pin EOL pytest versions there (GHSA-6w46-
+# j5rx-g56g). The script itself still targets 3.8+ — see its docstring.
+requires-python = ">=3.10"
 dynamic = ["version"]
 
 # The one place the version is written: the VERSION line in the script itself
