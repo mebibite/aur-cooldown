@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 — 2026-08-01
 
 - The shell reminder now offers to run `observe` for you instead of only naming
   the command to retype. It takes a single keypress, no Enter needed; `y` or
