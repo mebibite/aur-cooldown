@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `upgrade` no longer passes the same package twice to `pacman -U` when a plan
+  contains several subpackages of one split PKGBUILD (e.g. `mullvad-vpn-bin`
+  and `mullvad-vpn-daemon-bin`); each built package is now installed exactly
+  once instead of aborting with "duplicate target".
+
 ## 0.8.0 — 2026-08-01
 
 - The shell reminder now offers to run `observe` for you instead of only naming

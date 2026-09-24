@@ -697,8 +697,21 @@ def cmd_upgrade(args):
 
     built = []
     if ready:
-        files = [f for _, _, arts in ready for f in arts]
-        print(f"\ninstalling {len(ready)} package(s)")
+        # A split PKGBUILD emits the same artifacts from every target's build
+        # dir, so a plan with several of its subpackages would hand duplicate
+        # paths to pacman -U and abort the whole transaction. Key the collected
+        # files by package name so each is installed exactly once.
+        seen = set()
+        files = []
+        for _, _, arts in ready:
+            for f in arts:
+                name = re.sub(r"-[0-9][^-]*-[^-]*\.pkg\.tar\..*$", "",
+                              os.path.basename(f))
+                if name in seen:
+                    continue
+                seen.add(name)
+                files.append(f)
+        print(f"\ninstalling {len(files)} package(s)")
         rc = run_root(["pacman", "-U", "--noconfirm", *files], sudo, flags)
         if rc == 0:
             built = [pkg for pkg, _, _ in ready]

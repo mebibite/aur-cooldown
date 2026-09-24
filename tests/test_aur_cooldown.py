@@ -403,3 +403,41 @@ def test_install_deps_installs_missing(tmp_path):
          mock.patch.object(m, "run_root", fake_root):
         assert m.install_deps(build, "su", [])
     assert "foo" in calls["cmd"] and "bar" in calls["cmd"] and "-S" in calls["cmd"]
+
+
+# ----------------------------------------------------------- upgrade installs
+
+def test_upgrade_installs_split_artifacts_once():
+    """A split PKGBUILD under several plan targets must reach pacman once each."""
+    args = types.SimpleNamespace(dry_run=False, yes=True,
+                                 pkgs=["mullvad-vpn-bin", "mullvad-vpn-daemon-bin"],
+                                 sudo=None, sudoflags=None)
+    install_calls, root_calls = [], []
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "makepkg":
+            for pkg in ("mullvad-vpn-bin", "mullvad-vpn-daemon-bin"):
+                write(os.path.join(kwargs["cwd"], f"{pkg}-2026.5-1-x86_64.pkg.tar.zst"),
+                      "x")
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+
+    def fake_root(cmd, sudo, flags):
+        root_calls.append(cmd)
+        return 0
+
+    def fake_resolve(pkg, cutoff, rows, deny, dl, is_auto):
+        return ("build", {"version": "2026.5-1", "repo": "/dummy", "commit": "a" * 40,
+                          "installed": "2026.4-1", "last_modified": 0})
+
+    with mock.patch.object(m, "resolve", fake_resolve), \
+         mock.patch.object(m, "resolve_sudo", lambda a: ("sudo", [])), \
+         mock.patch.object(m, "run_root", fake_root), \
+         mock.patch.object(subprocess, "run", fake_run):
+        m.cmd_upgrade(args)
+
+    install = [c for c in root_calls if c[:2] == ["pacman", "-U"]]
+    assert len(install) == 1
+    files = install[0][3:]
+    basenames = sorted(os.path.basename(f) for f in files)
+    assert basenames == ["mullvad-vpn-bin-2026.5-1-x86_64.pkg.tar.zst",
+                         "mullvad-vpn-daemon-bin-2026.5-1-x86_64.pkg.tar.zst"]
