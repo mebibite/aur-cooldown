@@ -407,18 +407,26 @@ def test_install_deps_installs_missing(tmp_path):
 
 # ----------------------------------------------------------- upgrade installs
 
-def test_upgrade_installs_split_artifacts_once():
-    """A split PKGBUILD under several plan targets must reach pacman once each."""
-    args = types.SimpleNamespace(dry_run=False, yes=True,
-                                 pkgs=["mullvad-vpn-bin", "mullvad-vpn-daemon-bin"],
+def test_artifact_pkgname():
+    assert m.artifact_pkgname("/b/espanso-x11-2.4.1-2-x86_64.pkg.tar.zst") == "espanso-x11"
+    assert m.artifact_pkgname("electron37-37.5.1-1-x86_64.pkg.tar.zst") == "electron37"
+    assert m.artifact_pkgname("spotify-1:1.2.96.518-2-x86_64.pkg.tar.zst") == "spotify"
+    assert m.artifact_pkgname("foo-debug-1.0-1-any.pkg.tar.xz") == "foo-debug"
+
+
+def run_upgrade(targets, built):
+    """Run cmd_upgrade for `targets` where every makepkg run emits `built`.
+
+    Returns the pacman -U calls, each reduced to the sorted file basenames.
+    """
+    args = types.SimpleNamespace(dry_run=False, yes=True, pkgs=targets,
                                  sudo=None, sudoflags=None)
-    install_calls, root_calls = [], []
+    root_calls = []
 
     def fake_run(cmd, **kwargs):
         if cmd[0] == "makepkg":
-            for pkg in ("mullvad-vpn-bin", "mullvad-vpn-daemon-bin"):
-                write(os.path.join(kwargs["cwd"], f"{pkg}-2026.5-1-x86_64.pkg.tar.zst"),
-                      "x")
+            for name in built:
+                write(os.path.join(kwargs["cwd"], name), "x")
         return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
 
     def fake_root(cmd, sudo, flags):
@@ -426,8 +434,8 @@ def test_upgrade_installs_split_artifacts_once():
         return 0
 
     def fake_resolve(pkg, cutoff, rows, deny, dl, is_auto):
-        return ("build", {"version": "2026.5-1", "repo": "/dummy", "commit": "a" * 40,
-                          "installed": "2026.4-1", "last_modified": 0})
+        return ("build", {"version": "1.0-1", "repo": "/dummy", "commit": "a" * 40,
+                          "installed": "0.9-1", "last_modified": 0})
 
     with mock.patch.object(m, "resolve", fake_resolve), \
          mock.patch.object(m, "resolve_sudo", lambda a: ("sudo", [])), \
@@ -435,9 +443,34 @@ def test_upgrade_installs_split_artifacts_once():
          mock.patch.object(subprocess, "run", fake_run):
         m.cmd_upgrade(args)
 
-    install = [c for c in root_calls if c[:2] == ["pacman", "-U"]]
-    assert len(install) == 1
-    files = install[0][3:]
-    basenames = sorted(os.path.basename(f) for f in files)
-    assert basenames == ["mullvad-vpn-bin-2026.5-1-x86_64.pkg.tar.zst",
-                         "mullvad-vpn-daemon-bin-2026.5-1-x86_64.pkg.tar.zst"]
+    return [sorted(os.path.basename(f) for f in c[3:])
+            for c in root_calls if c[:2] == ["pacman", "-U"]]
+
+
+def test_upgrade_installs_split_artifacts_once():
+    """A split PKGBUILD under several plan targets must reach pacman once each."""
+    installs = run_upgrade(
+        ["mullvad-vpn-bin", "mullvad-vpn-daemon-bin"],
+        ["mullvad-vpn-bin-1.0-1-x86_64.pkg.tar.zst",
+         "mullvad-vpn-daemon-bin-1.0-1-x86_64.pkg.tar.zst",
+         "mullvad-vpn-bin-debug-1.0-1-x86_64.pkg.tar.zst"])
+    assert installs == [["mullvad-vpn-bin-1.0-1-x86_64.pkg.tar.zst",
+                         "mullvad-vpn-daemon-bin-1.0-1-x86_64.pkg.tar.zst"]]
+
+
+def test_upgrade_skips_split_siblings_not_targeted():
+    """Only the targeted subpackage is installed, not a conflicting sibling."""
+    installs = run_upgrade(
+        ["espanso-x11"],
+        ["espanso-wayland-1.0-1-x86_64.pkg.tar.zst",
+         "espanso-x11-1.0-1-x86_64.pkg.tar.zst"])
+    assert installs == [["espanso-x11-1.0-1-x86_64.pkg.tar.zst"]]
+
+
+def test_upgrade_fails_when_target_package_not_built(capsys):
+    """A build that emits only other names (e.g. a renamed package) fails loudly."""
+    installs = run_upgrade(["oldname"], ["newname-1.0-1-x86_64.pkg.tar.zst"])
+    assert installs == []
+    out = capsys.readouterr().out
+    assert "makepkg produced no oldname package" in out
+    assert "failed: oldname" in out

@@ -2,10 +2,14 @@
 
 ## Unreleased
 
-- `upgrade` no longer passes the same package twice to `pacman -U` when a plan
-  contains several subpackages of one split PKGBUILD (e.g. `mullvad-vpn-bin`
-  and `mullvad-vpn-daemon-bin`); each built package is now installed exactly
-  once instead of aborting with "duplicate target".
+- `upgrade` now installs only the packages it was asked to upgrade from a split
+  PKGBUILD, instead of every package the build produces. Before, upgrading
+  `espanso-x11` also tried to install the conflicting `espanso-wayland` and
+  pacman refused the whole transaction; and a plan with several subpackages of
+  one PKGBUILD (e.g. `mullvad-vpn-bin` and `mullvad-vpn-daemon-bin`) passed
+  each package to `pacman -U` twice and aborted with "duplicate target". A build
+  that does not produce the targeted package (e.g. after an upstream rename) is
+  now reported as failed instead of installing something else.
 
 ## 0.8.0 — 2026-08-01
 
