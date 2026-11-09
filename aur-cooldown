@@ -483,7 +483,7 @@ def artifact_pkgname(path):
     everything before the last three hyphens, even when the name itself
     contains hyphens or digits.
     """
-    return os.path.basename(path).split(".pkg.tar.")[0].rsplit("-", 3)[0]
+    return os.path.basename(path).rsplit(".pkg.tar.", 1)[0].rsplit("-", 3)[0]
 
 
 # --- observe -----------------------------------------------------------------
